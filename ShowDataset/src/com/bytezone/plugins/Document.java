@@ -27,6 +27,9 @@ public class Document
     assert datasetName.equals (page.datasetName);
     assert memberName.equals (page.memberName);
 
+    // Invalidate cached stitched lines since pages are changing
+    lines.clear ();
+
     boolean found = false;
     int index = 0;
     for (DocumentPage dp : pages)
@@ -46,7 +49,7 @@ public class Document
     }
     else
     {
-      pages.add (index, page);
+      pages.set (index, page);
       System.out.println ("replacing");
     }
 
@@ -72,12 +75,12 @@ public class Document
 
       if (page.leftColumn == 1)
       {
-        int count = 0;
-        for (String text : page.lines)
+        int limit = Math.min (page.lines.size (), page.numbers.size ());
+        for (int i = 0; i < limit; i++)
         {
-          String number = page.numbers.get (count++);
+          String number = page.numbers.get (i);
           Line line = new Line ();
-          line.text = String.format ("%s %s", number, text);
+          line.text = String.format ("%s %s", number, page.lines.get (i));
           line.leftColumn = page.leftColumn;
           line.rightColumn = page.rightColumn;
           lines.add (line);
@@ -89,6 +92,12 @@ public class Document
         String format = "%-" + col + "." + col + "s%s";
         for (String text : page.lines)
         {
+          if (lineNo >= lines.size ())
+          {
+            System.out.printf ("stitch: lineNo %d exceeds lines size %d, skipping%n",
+                lineNo, lines.size ());
+            break;
+          }
           Line line = lines.get (lineNo++);
           line.text = String.format (format, line.text, text);
           line.rightColumn = page.rightColumn;

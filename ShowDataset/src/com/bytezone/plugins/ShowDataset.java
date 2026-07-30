@@ -59,6 +59,7 @@ public class ShowDataset extends DefaultPlugin
     currentDocument = null;
     previousPage = null;
     loopCount = 0;
+    pendingBottomRight = false;
 
     DocumentPage page = DocumentPage.createPage (data, getModifiableFields (data));
     if (page == null)
@@ -67,10 +68,14 @@ public class ShowDataset extends DefaultPlugin
       return;
     }
 
+    // Remove any previously cached version so we get a fresh collection
+    documents.remove (page.fullName);
+
     if (page.firstLine != 1)
     {
       data.key = AIDCommand.AID_PF7;
       setMax (data);
+      doesAuto = true;
       return;
     }
 
@@ -78,15 +83,22 @@ public class ShowDataset extends DefaultPlugin
     {
       data.key = AIDCommand.AID_PF10;
       setMax (data);
+      doesAuto = true;
       return;
     }
 
     setCurrentDocument (page);
 
     if (page.hasEnd)
+    {
       data.key = AIDCommand.AID_PF11;
+      setMax (data);
+      pendingBottomRight = true;
+    }
     else
+    {
       data.key = AIDCommand.AID_PF8;
+    }
     doesAuto = true;
   }
 
@@ -98,6 +110,7 @@ public class ShowDataset extends DefaultPlugin
     {
       System.out.println ("loop count exceeded");
       doesAuto = false;
+      showDocument ();
       return;
     }
 
@@ -115,10 +128,20 @@ public class ShowDataset extends DefaultPlugin
       prepareVisitorGrid (page.lastLine, page.rightColumn);
     }
 
+    // If page has no data lines, we've scrolled past the content
+    if (page.lines.isEmpty ())
+    {
+      System.out.println ("Empty page detected - done scrolling");
+      doesAuto = false;
+      showDocument ();
+      return;
+    }
+
     if (page.matches (previousPage))
     {
       System.out.println ("We're done");
       doesAuto = false;
+      showDocument ();
       return;
     }
 
@@ -216,6 +239,16 @@ public class ShowDataset extends DefaultPlugin
     System.out.printf ("Visited: %d, unvisited: %d%n", visitedPages, unvisitedPages);
   }
 
+  private void showDocument ()
+  {
+    if (currentDocument != null)
+    {
+      System.out.println ("Showing document window");
+      datasetStage.setDocument (currentDocument);
+      datasetStage.show ();
+    }
+  }
+
   private void setCurrentDocument (DocumentPage page)
   {
     String name = page.fullName;
@@ -225,6 +258,9 @@ public class ShowDataset extends DefaultPlugin
       currentDocument.addDocumentPage (page);
     }
     else
+    {
       currentDocument = new Document (page);
+      documents.put (name, currentDocument);
+    }
   }
 }

@@ -15,7 +15,7 @@ public class DocumentPage implements Comparable<DocumentPage>
   private static final String END_DATA =
       "**************************** Bottom of D" + "ata ****************************";
     private static final Pattern EDIT_PATTERN = Pattern.compile (
-      "(?i).*\\BEDIT\\b.*");
+      "(?i).*EDIT\\b.*");
   private static final Pattern p = Pattern.compile (
       "([A-Z0-9]{1,8}(\\.[A-Z0-9]{1,8})*)" // dataset name
           + "(\\([A-Z0-9]{1,8}\\))?"      // member name
@@ -70,7 +70,16 @@ public class DocumentPage implements Comparable<DocumentPage>
       return null;
     }
 
-    return new DocumentPage (data, modifiableFields);
+    try
+    {
+      return new DocumentPage (data, modifiableFields);
+    }
+    catch (Exception e)
+    {
+      System.out.println ("Error creating DocumentPage: " + e.getMessage ());
+      e.printStackTrace ();
+      return null;
+    }
   }
 
   private DocumentPage (PluginData data, List<PluginField> modifiableFields)
@@ -78,42 +87,111 @@ public class DocumentPage implements Comparable<DocumentPage>
     getDatasetName (data);
     getColumns (data);
 
+    // Build a list of number fields (column 1) and content fields (column > 6)
+    // grouped by their row, so we can pair them correctly.
+    List<PluginField> numberFields = new ArrayList<> ();
+    List<PluginField> contentFields = new ArrayList<> ();
+
     for (PluginField sf : modifiableFields)
-      switch (sf.location.column)
+    {
+      if (sf.location.column == 1)
       {
-        case 1:
-          if (sf.getLength () == 6 && sf.getFieldValue ().equals ("******"))
+        if (sf.getLength () == 6 && sf.getFieldValue ().equals ("******"))
+        {
+          PluginField nextField = data.getField (sf.sequence + 1);
+          if (nextField != null && nextField.isProtected
+              && nextField.getLength () >= 72)
           {
-            PluginField nextField = data.getField (sf.sequence + 1);
-            if (nextField != null && nextField.isProtected
-                && nextField.getLength () >= 72)
-            {
-              if (nextField.getFieldValue ().startsWith (START_DATA))
-                hasBeginning = true;
-              else if (nextField.getFieldValue ().startsWith (END_DATA))
-                hasEnd = true;
-            }
+            if (nextField.getFieldValue ().startsWith (START_DATA))
+              hasBeginning = true;
+            else if (nextField.getFieldValue ().startsWith (END_DATA))
+              hasEnd = true;
           }
-          else
-            numbers.add (sf.getFieldValue ());
-          break;
+        }
+        else
+          numberFields.add (sf);
+      }
+      else if (sf.location.column > 6 && sf.location.column < 15)
+      {
+        contentFields.add (sf);
+      }
+    }
 
-        case 8:
-          lines.add (sf.getFieldValue ());
-          break;
+    // Pair numbers and lines by matching rows
+    if (numberFields.size () == contentFields.size ())
+    {
+      // Sizes match — assume they are already paired in order
+      for (int i = 0; i < numberFields.size (); i++)
+      {
+        numbers.add (numberFields.get (i).getFieldValue ());
+        lines.add (contentFields.get (i).getFieldValue ());
+      }
+    }
+    else
+    {
+      // Sizes don't match — pair by row number for robustness
+      System.out.printf ("Field count mismatch: %d numbers vs %d lines, pairing by row%n",
+          numberFields.size (), contentFields.size ());
 
-        case 14:      // command field
-        case 75:      // CSR/PAGE
-          break;
+      // Index content fields by row for quick lookup
+      java.util.Map<Integer, PluginField> contentByRow = new java.util.LinkedHashMap<> ();
+      for (PluginField cf : contentFields)
+        contentByRow.put (cf.location.row, cf);
 
-        default:
-          System.out.printf ("column %d: %s%n", sf.location.column, sf.getFieldValue ());
+      for (PluginField nf : numberFields)
+      {
+        PluginField cf = contentByRow.remove (nf.location.row);
+        if (cf != null)
+        {
+          numbers.add (nf.getFieldValue ());
+          lines.add (cf.getFieldValue ());
+        }
+        else
+        {
+          System.out.printf ("No content field for number at row %d: %s%n",
+              nf.location.row, nf.getFieldValue ());
+        }
       }
 
-    if (lines.size () > 0)
+      // Also handle content fields without numbers (e.g. marker lines)
+      for (java.util.Map.Entry<Integer, PluginField> entry : contentByRow.entrySet ())
+      {
+        System.out.printf ("Unpaired content field at row %d: %s%n",
+            entry.getKey (), entry.getValue ().getFieldValue ());
+      }
+    }
+
+    // Scan ALL screen fields (including protected) for Top/Bottom of Data
+    // markers. In RPF, these markers are protected fields, not modifiable,
+    // so the modifiable-fields loop above won't find them.
+    if (!hasBeginning || !hasEnd)
     {
-      firstLine = Integer.parseInt (numbers.get (0));
-      lastLine = Integer.parseInt (numbers.get (numbers.size () - 1));
+      for (PluginField sf : data.screenFields)
+      {
+        String val = sf.getFieldValue ();
+        if (val == null)
+          continue;
+        if (!hasBeginning && val.contains ("Top of Data"))
+          hasBeginning = true;
+        if (!hasEnd && val.contains ("Bottom of Data"))
+          hasEnd = true;
+      }
+    }
+
+    if (numbers.size () > 0)
+    {
+      try
+      {
+        firstLine = Integer.parseInt (numbers.get (0).trim ());
+        lastLine = Integer.parseInt (numbers.get (numbers.size () - 1).trim ());
+      }
+      catch (NumberFormatException e)
+      {
+        System.out.printf ("Cannot parse line numbers: first='%s', last='%s'%n",
+            numbers.get (0), numbers.get (numbers.size () - 1));
+        firstLine = -1;
+        lastLine = -1;
+      }
     }
   }
 
@@ -122,45 +200,86 @@ public class DocumentPage implements Comparable<DocumentPage>
     if (otherPage == null)
       return false;
 
-    return leftColumn == otherPage.leftColumn && rightColumn == otherPage.rightColumn
-        && firstLine >= 0 && firstLine == otherPage.firstLine;
+    if (leftColumn != otherPage.leftColumn || rightColumn != otherPage.rightColumn)
+      return false;
+
+    // Both pages have data lines - compare first line numbers
+    if (firstLine >= 0 && otherPage.firstLine >= 0)
+      return firstLine == otherPage.firstLine;
+
+    // Both pages are empty (no data lines) - we're stuck
+    if (firstLine < 0 && otherPage.firstLine < 0)
+      return true;
+
+    return false;
   }
 
   private void getDatasetName (PluginData data)
   {
-    datasetName = data.trimField (12);
-    Matcher m = p.matcher (datasetName);
-    if (m.matches ())
+    for (int i = 0; i < Math.min(25, data.screenFields.size()); i++)
     {
-      if (false)
+      String text = data.trimField (i);
+      if (text == null || text.isEmpty()) continue;
+
+      if (text.startsWith("RFEEDIT") || text.startsWith("EDIT") || 
+          text.startsWith("BROWSE") || text.startsWith("VIEW"))
       {
-        System.out.println (m.groupCount ());
-        for (int i = 0; i <= m.groupCount (); i++)
-          System.out.printf ("%2d %s%n", i, m.group (i));
+        String[] parts = text.split("\\s+");
+        if (parts.length >= 2)
+        {
+          text = parts[1];
+          if (parts.length >= 4 && parts[2].equals("-"))
+            text = text + " - " + parts[3];
+        }
       }
 
-      datasetName = m.group (1);
-      if (m.groupCount () >= 3)
+      Matcher m = p.matcher (text);
+      if (m.matches ())
       {
-        String name = m.group (3);
-        memberName = name.substring (1, name.length () - 1);
-        fullName = String.format ("%s(%s)", datasetName, memberName);
-      }
-      else
-      {
-        memberName = "";
-        fullName = datasetName;
+        if (text.contains(".") || text.contains("("))
+        {
+          datasetName = m.group (1);
+          String name = m.group (3);
+          if (name != null)
+          {
+            memberName = name.substring (1, name.length () - 1);
+            fullName = String.format ("%s(%s)", datasetName, memberName);
+          }
+          else
+          {
+            memberName = "";
+            fullName = datasetName;
+          }
+          return;
+        }
       }
     }
+    datasetName = "UNKNOWN";
+    memberName = "";
+    fullName = "UNKNOWN";
   }
 
   private void getColumns (PluginData data)
   {
-    PluginField columnsField = findField ("Columns", data);        // may not exist
+    PluginField columnsField = findFieldContaining ("columns", data);
 
-    if (columnsField == null || columnsField.getLength () != 7
-        || columnsField.isModifiable)
+    if (columnsField == null || columnsField.isModifiable)
       return;
+
+    String text = columnsField.getFieldValue().trim().toLowerCase();
+    
+    String[] parts = text.split("\\s+");
+    for (int i = 0; i < parts.length - 2; i++) {
+        if (parts[i].equals("columns") || parts[i].equals("col")) {
+            try {
+                leftColumn = Integer.parseInt(parts[i+1]);
+                rightColumn = Integer.parseInt(parts[i+2]);
+                return;
+            } catch (NumberFormatException e) {
+                // fall through
+            }
+        }
+    }
 
     String col1 = data.trimField (columnsField.sequence + 1);
     String col2 = data.trimField (columnsField.sequence + 2);
@@ -233,8 +352,12 @@ public class DocumentPage implements Comparable<DocumentPage>
     text.append (String.format ("Right column .... %d%n", rightColumn));
     text.append ("\n");
 
-    for (int i = 0; i < lines.size (); i++)
+    int limit = Math.min (numbers.size (), lines.size ());
+    for (int i = 0; i < limit; i++)
       text.append (String.format ("%s %s%n", numbers.get (i), lines.get (i)));
+    // Append any remaining lines without numbers
+    for (int i = limit; i < lines.size (); i++)
+      text.append (String.format ("       %s%n", lines.get (i)));
 
     return text.toString ();
   }
