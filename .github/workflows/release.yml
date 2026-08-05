@@ -1,0 +1,40 @@
+name: Build and Release Plugins
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Build Plugins
+        run: |
+          mkdir -p dist
+          for plugin in DownloadDataset FanLogoff FanLogon ShowDataset ShowFields; do
+              echo "Building $plugin"
+              mkdir -p $plugin/out
+              javac -cp "dm3270-1.0.0-SNAPSHOT-all.jar" -d $plugin/out $plugin/src/com/bytezone/plugins/*.java
+              jar cvf dist/$plugin.jar -C $plugin/out .
+          done
+          
+      - name: Create Release and Upload JARs
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release Plugins ${{ github.ref_name }}
+          files: "dist/*.jar"
+          generate_release_notes: true
