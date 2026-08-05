@@ -21,13 +21,24 @@ jobs:
           java-version: '21'
           distribution: 'temurin'
 
+      - name: Baixar dependência do dm3270 (Última Release)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # O gh cli vem instalado no ubuntu-latest e permite baixar a última release pública
+          gh release download --repo rafarito/dm3270 --pattern "*.jar"
+          
+          # Salva o nome do arquivo baixado na variável de ambiente
+          DM3270_JAR=$(ls dm3270-*.jar | head -n 1)
+          echo "DM3270_JAR=${DM3270_JAR}" >> $GITHUB_ENV
+
       - name: Build Plugins
         run: |
           mkdir -p dist
           for plugin in DownloadDataset FanLogoff FanLogon ShowDataset ShowFields; do
               echo "Building $plugin"
               mkdir -p $plugin/out
-              javac -cp "dm3270-1.0.0-SNAPSHOT-all.jar" -d $plugin/out $plugin/src/com/bytezone/plugins/*.java
+              javac -cp "${{ env.DM3270_JAR }}" -d $plugin/out $plugin/src/com/bytezone/plugins/*.java
               jar cvf dist/$plugin.jar -C $plugin/out .
           done
           
