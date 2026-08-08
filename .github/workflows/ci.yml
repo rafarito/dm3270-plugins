@@ -41,10 +41,26 @@ jobs:
       - name: Rodar os testes
         run: mvn --batch-mode test
 
-      - name: Publicar os relatorios de teste
+      - name: Publicar os relatorios de teste e cobertura
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: surefire-reports
-          path: '**/target/surefire-reports/'
+          name: test-and-coverage-reports
+          path: |
+            **/target/surefire-reports/
+            **/target/site/jacoco/
+          if-no-files-found: ignore
+
+      # Mutation testing e caro demais para rodar em cada push, mas aqui so um
+      # modulo tem testes, entao cabe no mesmo job quando acionado manualmente.
+      - name: Rodar o mutation testing
+        if: github.event_name == 'workflow_dispatch'
+        run: mvn --batch-mode test-compile pitest:mutationCoverage
+
+      - name: Publicar o relatorio de mutacao
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pit-reports
+          path: '**/target/pit-reports/'
           if-no-files-found: ignore
