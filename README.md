@@ -20,9 +20,36 @@ The plugins depend on the core `dm3270` emulator classes. A pre-compiled "fat JA
 
 Since the plugins also use JavaFX (e.g., for alerts and stages), you need to make sure you are compiling with a JDK that includes JavaFX (like JDK 8) or you have the JavaFX modules available in your environment if you are using newer Java versions (Java 11+).
 
-## How to Build a Plugin
+## Build with Maven (recommended)
 
-To build a plugin, you must compile its `.java` files using the `dm3270` JAR file in your classpath, and then package the resulting `.class` files into a `.jar` archive.
+The repository is a Maven multi-module project — one module per plugin. It needs the
+`dm3270` artifact in your local repository first:
+
+```bash
+# once, from the dm3270 checkout
+mvn install -DskipTests
+
+# then, from this repository
+mvn package        # builds DownloadDataset/target/DownloadDataset.jar and friends
+mvn test           # runs the unit tests
+```
+
+If you only have the released fat JAR (and not the `dm3270` sources), install it under the
+coordinates the poms expect:
+
+```bash
+mvn install:install-file -Dfile=dm3270-1.0.0-SNAPSHOT-all.jar \
+    -DgroupId=com.bytezone -DartifactId=dm3270 -Dversion=1.0.0-SNAPSHOT -Dpackaging=jar
+```
+
+See [TESTING.md](../dm3270/TESTING.md) in the `dm3270` repository for the module map and
+the test strategy covering both projects.
+
+## How to Build a Plugin manually
+
+The manual route below still works and needs no Maven. To build a plugin, you must compile
+its `.java` files using the `dm3270` JAR file in your classpath, and then package the
+resulting `.class` files into a `.jar` archive.
 
 Here is a step-by-step example of how to build the `ShowFields` plugin using standard `javac` and `jar` tools from the command line:
 
