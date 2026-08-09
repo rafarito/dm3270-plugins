@@ -4,6 +4,7 @@ import java.io.File;
 import java.io.PrintWriter;
 import java.io.IOException;
 import java.util.Map;
+import java.util.function.Consumer;
 import java.util.TreeMap;
 
 import com.bytezone.dm3270.commands.AIDCommand;
@@ -243,33 +244,60 @@ public class DownloadDataset extends DefaultPlugin
     System.out.printf ("Visited: %d, unvisited: %d%n", visitedPagesCount, unvisitedPages);
   }
 
+  // A captura termina aqui, e ela nao pode depender do toolkit do JavaFX: quem escolhe
+  // onde gravar e uma etapa separada, trocavel em teste por writeTo ().
   private void saveDocument ()
   {
-    if (currentDocument != null)
+    if (currentDocument == null)
+      return;
+
+    Document document = currentDocument;
+    System.out.println ("Preparando para salvar o documento: " + document.datasetName);
+    documentSaver.accept (document);
+  }
+
+  // O nome sugerido no dialogo: o membro quando existe, senao o dataset.
+  static String suggestedFileName (Document document)
+  {
+    String name = document.memberName.isEmpty () ? document.datasetName
+        : document.memberName;
+
+    return name + ".txt";
+  }
+
+  // Grava uma linha por registro. Visivel ao teste para que o formato do arquivo seja
+  // verificavel sem abrir dialogo nenhum.
+  static void writeTo (Document document, File file)
+  {
+    try (PrintWriter writer = new PrintWriter (file))
     {
-      System.out.println ("Preparando para salvar o documento: " + currentDocument.datasetName);
-      Platform.runLater(() -> {
-        FileChooser fileChooser = new FileChooser();
-        fileChooser.setTitle("Salvar Dataset");
-        
-        String defaultName = currentDocument.memberName.isEmpty() ? currentDocument.datasetName : currentDocument.memberName;
-        fileChooser.setInitialFileName(defaultName + ".txt");
-        
-        File file = fileChooser.showSaveDialog(null);
-        if (file != null) {
-            try (PrintWriter writer = new PrintWriter(file)) {
-                for (Document.Line line : currentDocument.getLines()) {
-                    writer.println(line.toString());
-                }
-                System.out.println("Documento salvo em: " + file.getAbsolutePath());
-            } catch (IOException ex) {
-                System.out.println("Erro ao salvar documento: " + ex.getMessage());
-            }
-        }
-      });
+      for (Document.Line line : document.getLines ())
+        writer.println (line.toString ());
+
+      System.out.println ("Documento salvo em: " + file.getAbsolutePath ());
+    }
+    catch (IOException ex)
+    {
+      System.out.println ("Erro ao salvar documento: " + ex.getMessage ());
     }
   }
 
+  // Substituivel em teste; em producao abre o seletor de arquivos na thread do JavaFX.
+  private Consumer<Document> documentSaver = document -> Platform.runLater ( () ->
+  {
+    FileChooser fileChooser = new FileChooser ();
+    fileChooser.setTitle ("Salvar Dataset");
+    fileChooser.setInitialFileName (suggestedFileName (document));
+
+    File file = fileChooser.showSaveDialog (null);
+    if (file != null)
+      writeTo (document, file);
+  });
+
+  void setDocumentSaver (Consumer<Document> documentSaver)
+  {
+    this.documentSaver = documentSaver;
+  }
 
   private void setCurrentDocument (DocumentPage page)
   {
