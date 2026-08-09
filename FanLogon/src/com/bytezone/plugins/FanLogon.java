@@ -1,6 +1,7 @@
 package com.bytezone.plugins;
 
 import java.util.Optional;
+import java.util.function.BiConsumer;
 
 import com.bytezone.dm3270.application.Parameters;
 import com.bytezone.dm3270.application.Parameters.SiteParameters;
@@ -43,10 +44,15 @@ public class FanLogon extends DefaultPlugin
       SiteParameters siteParameters = sp.get ();
       user = siteParameters.getParameter ("user");
       password = siteParameters.getParameter ("password");
-      if (user == null || password == null)
+
+      // getParameter () devolve "" para uma chave ausente, nunca null: testar contra
+      // null deixava passar uma secao [FanDeZhi] sem usuario nem senha, e o plugin
+      // seguia adiante montando o comando "TSO " com o usuario vazio
+      if (user.isEmpty () || password.isEmpty ())
       {
         showAlert (AlertType.ERROR, "Parameters not found");
         doesAuto = false;
+        doesRequest = false;
       }
       else
       {
@@ -165,11 +171,23 @@ public class FanLogon extends DefaultPlugin
       doesAuto = false;
   }
 
-  private boolean showAlert (AlertType alertType, String message)
+  // Substituivel em teste; em producao abre o dialogo do JavaFX, que exige o toolkit.
+  private BiConsumer<AlertType, String> alertHandler = (alertType, message) ->
   {
     Alert alert = new Alert (alertType, message);
     alert.getDialogPane ().setHeaderText (null);
     Optional<ButtonType> result = alert.showAndWait ();
-    return (result.isPresent () && result.get () == ButtonType.OK);
+    if (result.isPresent () && result.get () == ButtonType.OK)
+      System.out.println (message);
+  };
+
+  void setAlertHandler (BiConsumer<AlertType, String> alertHandler)
+  {
+    this.alertHandler = alertHandler;
+  }
+
+  private void showAlert (AlertType alertType, String message)
+  {
+    alertHandler.accept (alertType, message);
   }
 }
