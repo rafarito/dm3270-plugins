@@ -211,14 +211,17 @@ public class DownloadDataset extends DefaultPlugin
     }
   }
 
+  // O "m" (MAX) pertence ao campo de scroll: escrito na linha de comando ele nao rola
+  // nada e ainda deixa lixo no campo que o ISPF vai interpretar como comando.
   private void setMax (PluginData data)
   {
-    PluginField commandField = data.getField ("Command ===>");
-    if (commandField != null)
-    {
-      PluginField inputField = data.getField (commandField.sequence + 1);
-      inputField.change ("m");
-    }
+    PluginField scrollLabel = data.getField ("Scroll ===>");
+    if (scrollLabel == null)
+      return;
+
+    PluginField scrollInput = data.getField (scrollLabel.sequence + 1);
+    if (scrollInput != null && scrollInput.isModifiable)
+      scrollInput.change ("m");
   }
 
   private void prepareVisitorGrid (int rows, int columns)
@@ -266,6 +269,7 @@ public class DownloadDataset extends DefaultPlugin
       });
     }
   }
+
 
   private void setCurrentDocument (DocumentPage page)
   {
