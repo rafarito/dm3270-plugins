@@ -66,14 +66,17 @@ class DocumentPageTest
     @ParameterizedTest (name = "titulo \"{0}\"")
     @ValueSource (strings = { "BROWSE     MYUSER.TEST.CNTL(JOB1)",
                               "VIEW       MYUSER.TEST.CNTL(JOB1)" })
-    @DisplayName ("LIMITACAO: telas de BROWSE e VIEW sao recusadas")
-    void rejectsBrowseAndView (String title)
+    @DisplayName ("telas de BROWSE e VIEW tambem sao aceitas")
+    void acceptsBrowseAndView (String title)
     {
-      // getDatasetName() sabe extrair o nome de telas BROWSE e VIEW, mas createPage()
-      // so aceita a tela se algum campo casar com EDIT_PATTERN ("(?i).*EDIT\\b.*").
-      // Resultado: essas telas nunca chegam ao construtor. Se a intencao for suportar
-      // os tres modos, o padrao precisa incluir BROWSE e VIEW.
-      assertNull (page (threeLinePage (title, "Columns 00001 00072")));
+      // getDatasetName () sempre soube extrair o nome de telas BROWSE e VIEW; o
+      // EDIT_PATTERN agora aceita os mesmos quatro cabecalhos, em vez de recusar essas
+      // telas na porta de entrada
+      DocumentPage documentPage = page (threeLinePage (title, "Columns 00001 00072"));
+
+      assertNotNull (documentPage);
+      assertEquals ("MYUSER.TEST.CNTL", documentPage.datasetName);
+      assertEquals ("JOB1", documentPage.memberName);
     }
 
     @Test
@@ -212,18 +215,18 @@ class DocumentPageTest
     }
 
     @Test
-    @DisplayName ("LIMITACAO: a abreviacao 'Col' nao e reconhecida")
-    void colAbbreviationIsNotRecognised ()
+    @DisplayName ("a abreviacao 'Col' tambem e reconhecida")
+    void colAbbreviationIsRecognised ()
     {
-      // getColumns() localiza o campo com findFieldContaining("columns"): um cabecalho
-      // abreviado como "Col 00010 00050" nunca e encontrado. O ramo que compara
-      // parts[i].equals("col") mais adiante e, na pratica, inalcancavel.
+      // o ISPF abrevia o cabecalho em telas estreitas; getColumns () procura "columns"
+      // e, nao achando, tenta "col" — que e o que torna alcancavel o ramo comparando
+      // parts[i].equals ("col")
       DocumentPage documentPage = page (
           threeLinePage ("EDIT       MYUSER.TEST.CNTL(JOB1)", "Col 00010 00050"));
 
       assertNotNull (documentPage);
-      assertEquals (0, documentPage.leftColumn);
-      assertEquals (0, documentPage.rightColumn);
+      assertEquals (10, documentPage.leftColumn);
+      assertEquals (50, documentPage.rightColumn);
     }
 
     @Test
