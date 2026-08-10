@@ -1,0 +1,163 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>com.bytezone</groupId>
+  <artifactId>dm3270-plugins</artifactId>
+  <version>1.0.0-SNAPSHOT</version>
+  <packaging>pom</packaging>
+  <name>dm3270-plugins</name>
+  <description>Plugins do emulador dm3270</description>
+
+  <!--
+    Este projeto depende do artefato do dm3270. Antes de compilar aqui, rode
+    no repositorio dm3270:
+
+        mvn install -DskipTests
+  -->
+
+  <modules>
+    <module>DownloadDataset</module>
+    <module>ShowDataset</module>
+    <module>ShowFields</module>
+    <module>FanLogon</module>
+    <module>FanLogoff</module>
+  </modules>
+
+  <properties>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <maven.compiler.release>21</maven.compiler.release>
+    <dm3270.version>1.0.0-SNAPSHOT</dm3270.version>
+    <junit.version>5.12.2</junit.version>
+    <jacoco.version>0.8.13</jacoco.version>
+    <pitest.version>1.20.1</pitest.version>
+    <pitest.junit5.version>1.2.3</pitest.junit5.version>
+
+    <!--
+      Preenchida pelo agente do JaCoCo em tempo de build. O valor default vazio
+      mantem `mvn surefire:test` funcionando quando o agente nao roda.
+    -->
+    <jacoco.argLine/>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.bytezone</groupId>
+      <artifactId>dm3270</artifactId>
+      <version>${dm3270.version}</version>
+      <scope>provided</scope>
+    </dependency>
+
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>${junit.version}</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <pluginManagement>
+      <plugins>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-compiler-plugin</artifactId>
+          <version>3.14.0</version>
+          <configuration>
+            <release>${maven.compiler.release}</release>
+          </configuration>
+        </plugin>
+
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-surefire-plugin</artifactId>
+          <version>3.5.4</version>
+          <configuration>
+            <enableAssertions>true</enableAssertions>
+            <!-- @{...} adia a resolucao ate o agente do JaCoCo ter preenchido a propriedade -->
+            <argLine>@{jacoco.argLine} -Dfile.encoding=UTF-8 -Djava.awt.headless=true</argLine>
+          </configuration>
+        </plugin>
+
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-jar-plugin</artifactId>
+          <version>3.4.2</version>
+        </plugin>
+
+        <plugin>
+          <groupId>org.pitest</groupId>
+          <artifactId>pitest-maven</artifactId>
+          <version>${pitest.version}</version>
+          <dependencies>
+            <dependency>
+              <groupId>org.pitest</groupId>
+              <artifactId>pitest-junit5-plugin</artifactId>
+              <version>${pitest.junit5.version}</version>
+            </dependency>
+          </dependencies>
+          <configuration>
+            <targetClasses>
+              <param>com.bytezone.plugins.*</param>
+            </targetClasses>
+            <targetTests>
+              <param>com.bytezone.plugins.*Test</param>
+            </targetTests>
+            <outputFormats>
+              <param>HTML</param>
+              <param>XML</param>
+              <param>CSV</param>
+            </outputFormats>
+            <timestampedReports>false</timestampedReports>
+            <withHistory>true</withHistory>
+            <threads>4</threads>
+            <jvmArgs>
+              <jvmArg>-ea</jvmArg>
+              <jvmArg>-Djava.awt.headless=true</jvmArg>
+            </jvmArgs>
+            <!-- modulos sem teste nao devem quebrar o reator -->
+            <failWhenNoMutations>false</failWhenNoMutations>
+          </configuration>
+        </plugin>
+      </plugins>
+    </pluginManagement>
+
+    <plugins>
+      <!-- Cobertura de codigo: relatorio em <modulo>/target/site/jacoco/index.html -->
+      <plugin>
+        <groupId>org.jacoco</groupId>
+        <artifactId>jacoco-maven-plugin</artifactId>
+        <version>${jacoco.version}</version>
+        <configuration>
+          <propertyName>jacoco.argLine</propertyName>
+        </configuration>
+        <executions>
+          <execution>
+            <id>jacoco-prepare-agent</id>
+            <goals>
+              <goal>prepare-agent</goal>
+            </goals>
+          </execution>
+          <execution>
+            <id>jacoco-report</id>
+            <phase>test</phase>
+            <goals>
+              <goal>report</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+
+      <!--
+        Mutation testing. Nao roda no ciclo padrao (e caro); invoque com
+        `mvn test-compile pitest:mutationCoverage`.
+      -->
+      <plugin>
+        <groupId>org.pitest</groupId>
+        <artifactId>pitest-maven</artifactId>
+      </plugin>
+    </plugins>
+  </build>
+</project>

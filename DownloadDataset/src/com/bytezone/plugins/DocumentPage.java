@@ -14,8 +14,10 @@ public class DocumentPage implements Comparable<DocumentPage>
       "***************************** Top of Dat" + "a ******************************";
   private static final String END_DATA =
       "**************************** Bottom of D" + "ata ****************************";
-    private static final Pattern EDIT_PATTERN = Pattern.compile (
-      "(?i).*EDIT\\b.*");
+  // getDatasetName () sabe ler os quatro cabecalhos; recusar BROWSE e VIEW aqui deixava
+  // metade dessa logica inalcancavel.
+  private static final Pattern EDIT_PATTERN = Pattern.compile (
+      "(?i).*\\b(RFEEDIT|EDIT|BROWSE|VIEW)\\b.*");
   private static final Pattern p = Pattern.compile (
       "([A-Z0-9]{1,8}(\\.[A-Z0-9]{1,8})*)" // dataset name
           + "(\\([A-Z0-9]{1,8}\\))?"      // member name
@@ -261,7 +263,10 @@ public class DocumentPage implements Comparable<DocumentPage>
 
   private void getColumns (PluginData data)
   {
+    // "Columns 00001 00072" na tela cheia, "Col 1 72" quando o ISPF abrevia
     PluginField columnsField = findFieldContaining ("columns", data);
+    if (columnsField == null)
+      columnsField = findFieldContaining ("col", data);
 
     if (columnsField == null || columnsField.isModifiable)
       return;

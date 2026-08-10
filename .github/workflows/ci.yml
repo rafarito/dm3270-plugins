@@ -1,0 +1,66 @@
+name: Testes
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      # Os plugins compilam contra o dm3270. Aqui o jar da ultima release e
+      # instalado no repositorio Maven local com as mesmas coordenadas declaradas
+      # no pom (com.bytezone:dm3270:1.0.0-SNAPSHOT).
+      - name: Instalar a dependencia do dm3270
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download --repo rafarito/dm3270 --pattern "*.jar"
+          DM3270_JAR=$(ls dm3270-*.jar | head -n 1)
+          mvn --batch-mode install:install-file \
+            -Dfile="${DM3270_JAR}" \
+            -DgroupId=com.bytezone \
+            -DartifactId=dm3270 \
+            -Dversion=1.0.0-SNAPSHOT \
+            -Dpackaging=jar
+
+      - name: Rodar os testes
+        run: mvn --batch-mode test
+
+      - name: Publicar os relatorios de teste e cobertura
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-and-coverage-reports
+          path: |
+            **/target/surefire-reports/
+            **/target/site/jacoco/
+          if-no-files-found: ignore
+
+      # Mutation testing e caro demais para rodar em cada push, mas aqui so um
+      # modulo tem testes, entao cabe no mesmo job quando acionado manualmente.
+      - name: Rodar o mutation testing
+        if: github.event_name == 'workflow_dispatch'
+        run: mvn --batch-mode test-compile pitest:mutationCoverage
+
+      - name: Publicar o relatorio de mutacao
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pit-reports
+          path: '**/target/pit-reports/'
+          if-no-files-found: ignore
