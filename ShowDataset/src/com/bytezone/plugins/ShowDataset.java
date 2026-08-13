@@ -8,8 +8,13 @@ import com.bytezone.dm3270.plugins.DefaultPlugin;
 import com.bytezone.dm3270.plugins.PluginData;
 import com.bytezone.dm3270.plugins.PluginField;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 public class ShowDataset extends DefaultPlugin
 {
+  private static final Logger logger = LoggerFactory.getLogger (ShowDataset.class);
+
   private final Map<String, Document> documents = new TreeMap<> ();
   private final DatasetStage datasetStage = new DatasetStage ();
   private Document currentDocument;
@@ -64,7 +69,7 @@ public class ShowDataset extends DefaultPlugin
     DocumentPage page = DocumentPage.createPage (data, getModifiableFields (data));
     if (page == null)
     {
-      System.out.println ("Not a document page");
+      logger.warn ("Not a document page");
       return;
     }
 
@@ -105,10 +110,10 @@ public class ShowDataset extends DefaultPlugin
   @Override
   public void processAuto (PluginData data)
   {
-    System.out.printf ("Loopcount %d%n", loopCount);
+    logger.debug ("Loopcount {}", loopCount);
     if (++loopCount > maxLoops)
     {
-      System.out.println ("loop count exceeded");
+      logger.warn ("loop count exceeded");
       doesAuto = false;
       showDocument ();
       return;
@@ -117,7 +122,7 @@ public class ShowDataset extends DefaultPlugin
     DocumentPage page = DocumentPage.createPage (data, getModifiableFields (data));
     if (page == null)
     {
-      System.out.println ("Not a document page");
+      logger.warn ("Not a document page");
       doesAuto = false;
       return;
     }
@@ -131,7 +136,7 @@ public class ShowDataset extends DefaultPlugin
     // If page has no data lines, we've scrolled past the content
     if (page.lines.isEmpty ())
     {
-      System.out.println ("Empty page detected - done scrolling");
+      logger.info ("Empty page detected - done scrolling");
       doesAuto = false;
       showDocument ();
       return;
@@ -139,7 +144,7 @@ public class ShowDataset extends DefaultPlugin
 
     if (page.matches (previousPage))
     {
-      System.out.println ("We're done");
+      logger.info ("We're done");
       doesAuto = false;
       showDocument ();
       return;
@@ -151,7 +156,7 @@ public class ShowDataset extends DefaultPlugin
     {
       if (page.firstLine != 1)
       {
-        System.out.println ("Not at document first document line");
+        logger.warn ("Not at document first document line");
         doesAuto = false;
         return;
       }
@@ -168,9 +173,9 @@ public class ShowDataset extends DefaultPlugin
     else
       currentDocument.addDocumentPage (page);
 
-    System.out.println (currentDocument);
+    logger.debug ("{}", currentDocument);
 
-    System.out.println ("Where to now?");
+    logger.debug ("Where to now?");
     // scroll to next page
     if (page.leftColumn == 1)
     {
@@ -178,14 +183,14 @@ public class ShowDataset extends DefaultPlugin
       {
         data.key = AIDCommand.AID_PF11;       // go max right
         setMax (data);
-        System.out.println ("go right max");
+        logger.debug ("go right max");
         pendingBottomRight = true;
         return;
       }
       else
       {
         data.key = AIDCommand.AID_PF8;        // go down
-        System.out.println ("go down");
+        logger.debug ("go down");
         return;
       }
     }
@@ -196,7 +201,7 @@ public class ShowDataset extends DefaultPlugin
         data.key = AIDCommand.AID_PF10;       // go left (assumes only one circuit)
         setMax (data);
         doesAuto = false;
-        System.out.println ("go left max");
+        logger.debug ("go left max");
         datasetStage.setDocument (currentDocument);
         datasetStage.show ();
         return;
@@ -204,7 +209,7 @@ public class ShowDataset extends DefaultPlugin
       else
       {
         data.key = AIDCommand.AID_PF7;        // go up
-        System.out.println ("go up");
+        logger.debug ("go up");
         return;
       }
     }
@@ -235,15 +240,15 @@ public class ShowDataset extends DefaultPlugin
     int visitedPages = pageRows + (pageColumns > 1 ? 1 : 0);
     unvisitedPages = pageRows * pageColumns - visitedPages;
 
-    System.out.printf ("Grid %d rows x %d columns%n", pageRows, pageColumns);
-    System.out.printf ("Visited: %d, unvisited: %d%n", visitedPages, unvisitedPages);
+    logger.debug ("Grid {} rows x {} columns", pageRows, pageColumns);
+    logger.debug ("Visited: {}, unvisited: {}", visitedPages, unvisitedPages);
   }
 
   private void showDocument ()
   {
     if (currentDocument != null)
     {
-      System.out.println ("Showing document window");
+      logger.info ("Showing document window");
       datasetStage.setDocument (currentDocument);
       datasetStage.show ();
     }

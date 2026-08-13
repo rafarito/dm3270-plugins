@@ -4,8 +4,13 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 public class Document
 {
+  private static final Logger logger = LoggerFactory.getLogger (Document.class);
+
   final String datasetName;
   final String memberName;
   int maxColumns;
@@ -45,15 +50,15 @@ public class Document
     if (!found)
     {
       pages.add (page);
-      System.out.println ("adding");
+      logger.debug ("adding");
     }
     else
     {
       pages.set (index, page);
-      System.out.println ("replacing");
+      logger.debug ("replacing");
     }
 
-    System.out.println (page);
+    logger.debug ("{}", page);
   }
 
   public List<Line> getLines ()
@@ -94,7 +99,7 @@ public class Document
         {
           if (lineNo >= lines.size ())
           {
-            System.out.printf ("stitch: lineNo %d exceeds lines size %d, skipping%n",
+            logger.warn ("stitch: lineNo {} exceeds lines size {}, skipping",
                 lineNo, lines.size ());
             break;
           }

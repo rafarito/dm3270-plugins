@@ -14,8 +14,13 @@ import javafx.scene.control.Alert;
 import javafx.scene.control.Alert.AlertType;
 import javafx.scene.control.ButtonType;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 public class FanLogon extends DefaultPlugin
 {
+  private static final Logger logger = LoggerFactory.getLogger (FanLogon.class);
+
   private static final String TSO_HEADING = "------------------------------- "
       + "TSO/E LOGON -----------------------------------";
   private static final String FANDEZHI_HEADING =
@@ -178,7 +183,14 @@ public class FanLogon extends DefaultPlugin
     alert.getDialogPane ().setHeaderText (null);
     Optional<ButtonType> result = alert.showAndWait ();
     if (result.isPresent () && result.get () == ButtonType.OK)
-      System.out.println (message);
+    {
+      if (alertType == AlertType.ERROR)
+        logger.error (message);
+      else if (alertType == AlertType.WARNING)
+        logger.warn (message);
+      else
+        logger.info (message);
+    }
   };
 
   void setAlertHandler (BiConsumer<AlertType, String> alertHandler)

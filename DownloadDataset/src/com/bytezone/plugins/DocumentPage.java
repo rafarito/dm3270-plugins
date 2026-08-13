@@ -8,8 +8,13 @@ import java.util.regex.Pattern;
 import com.bytezone.dm3270.plugins.PluginData;
 import com.bytezone.dm3270.plugins.PluginField;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 public class DocumentPage implements Comparable<DocumentPage>
 {
+  private static final Logger logger = LoggerFactory.getLogger (DocumentPage.class);
+
   private static final String START_DATA =
       "***************************** Top of Dat" + "a ******************************";
   private static final String END_DATA =
@@ -45,7 +50,7 @@ public class DocumentPage implements Comparable<DocumentPage>
     PluginField editField = findFieldMatching (EDIT_PATTERN, data);
     if (editField == null)
     {
-      System.out.println ("Can't find editor mode field");
+      logger.warn ("Can't find editor mode field");
       return null;
     }
 
@@ -53,13 +58,13 @@ public class DocumentPage implements Comparable<DocumentPage>
     PluginField commandInputField = getNextModifiableField (commandLabelField, data);
     if (commandLabelField == null || commandInputField == null)
     {
-      System.out.println ("Can't find command field");
+      logger.warn ("Can't find command field");
       return null;
     }
 
     if (editField.sequence > commandLabelField.sequence)
     {
-      System.out.println ("Command field is before editor mode field");
+      logger.warn ("Command field is before editor mode field");
       return null;
     }
 
@@ -68,7 +73,7 @@ public class DocumentPage implements Comparable<DocumentPage>
     if (scrollLabelField == null || scrollInputField == null
         || scrollLabelField.sequence < commandLabelField.sequence)
     {
-      System.out.println ("Can't find valid scroll field");
+      logger.warn ("Can't find valid scroll field");
       return null;
     }
 
@@ -78,8 +83,7 @@ public class DocumentPage implements Comparable<DocumentPage>
     }
     catch (Exception e)
     {
-      System.out.println ("Error creating DocumentPage: " + e.getMessage ());
-      e.printStackTrace ();
+      logger.error ("Error creating DocumentPage", e);
       return null;
     }
   }
@@ -132,7 +136,7 @@ public class DocumentPage implements Comparable<DocumentPage>
     else
     {
       // Sizes don't match — pair by row number for robustness
-      System.out.printf ("Field count mismatch: %d numbers vs %d lines, pairing by row%n",
+      logger.warn ("Field count mismatch: {} numbers vs {} lines, pairing by row",
           numberFields.size (), contentFields.size ());
 
       // Index content fields by row for quick lookup
@@ -150,7 +154,7 @@ public class DocumentPage implements Comparable<DocumentPage>
         }
         else
         {
-          System.out.printf ("No content field for number at row %d: %s%n",
+          logger.warn ("No content field for number at row {}: {}",
               nf.location.row, nf.getFieldValue ());
         }
       }
@@ -158,7 +162,7 @@ public class DocumentPage implements Comparable<DocumentPage>
       // Also handle content fields without numbers (e.g. marker lines)
       for (java.util.Map.Entry<Integer, PluginField> entry : contentByRow.entrySet ())
       {
-        System.out.printf ("Unpaired content field at row %d: %s%n",
+        logger.warn ("Unpaired content field at row {}: {}",
             entry.getKey (), entry.getValue ().getFieldValue ());
       }
     }
@@ -189,8 +193,8 @@ public class DocumentPage implements Comparable<DocumentPage>
       }
       catch (NumberFormatException e)
       {
-        System.out.printf ("Cannot parse line numbers: first='%s', last='%s'%n",
-            numbers.get (0), numbers.get (numbers.size () - 1));
+        logger.warn ("Cannot parse line numbers: first='{}', last='{}'",
+            numbers.get (0), numbers.get (numbers.size () - 1), e);
         firstLine = -1;
         lastLine = -1;
       }
@@ -296,7 +300,7 @@ public class DocumentPage implements Comparable<DocumentPage>
     }
     catch (NumberFormatException e)
     {
-      System.out.println ("Bad column number format");
+      logger.warn ("Bad column number format", e);
       leftColumn = 0;
       rightColumn = 0;
     }

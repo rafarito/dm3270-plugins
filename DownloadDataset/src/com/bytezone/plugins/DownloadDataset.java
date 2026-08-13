@@ -12,11 +12,16 @@ import com.bytezone.dm3270.plugins.DefaultPlugin;
 import com.bytezone.dm3270.plugins.PluginData;
 import com.bytezone.dm3270.plugins.PluginField;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import javafx.application.Platform;
 import javafx.stage.FileChooser;
 
 public class DownloadDataset extends DefaultPlugin
 {
+  private static final Logger logger = LoggerFactory.getLogger (DownloadDataset.class);
+
   private final Map<String, Document> documents = new TreeMap<> ();
   private Document currentDocument;
   private boolean doesAuto;
@@ -67,7 +72,7 @@ public class DownloadDataset extends DefaultPlugin
     DocumentPage page = DocumentPage.createPage (data, getModifiableFields (data));
     if (page == null)
     {
-      System.out.println ("Not a document page");
+      logger.warn ("Not a document page");
       return;
     }
 
@@ -108,10 +113,10 @@ public class DownloadDataset extends DefaultPlugin
   @Override
   public void processAuto (PluginData data)
   {
-    System.out.printf ("Loopcount %d%n", loopCount);
+    logger.debug ("Loopcount {}", loopCount);
     if (++loopCount > maxLoops)
     {
-      System.out.println ("loop count exceeded");
+      logger.warn ("loop count exceeded");
       doesAuto = false;
       saveDocument ();
       return;
@@ -120,7 +125,7 @@ public class DownloadDataset extends DefaultPlugin
     DocumentPage page = DocumentPage.createPage (data, getModifiableFields (data));
     if (page == null)
     {
-      System.out.println ("Not a document page");
+      logger.warn ("Not a document page");
       doesAuto = false;
       return;
     }
@@ -134,7 +139,7 @@ public class DownloadDataset extends DefaultPlugin
     // If page has no data lines, we've scrolled past the content
     if (page.lines.isEmpty ())
     {
-      System.out.println ("Empty page detected - done scrolling");
+      logger.info ("Empty page detected - done scrolling");
       doesAuto = false;
       saveDocument ();
       return;
@@ -142,7 +147,7 @@ public class DownloadDataset extends DefaultPlugin
 
     if (page.matches (previousPage))
     {
-      System.out.println ("We're done");
+      logger.info ("We're done");
       doesAuto = false;
       saveDocument ();
       return;
@@ -154,7 +159,7 @@ public class DownloadDataset extends DefaultPlugin
     {
       if (page.firstLine != 1)
       {
-        System.out.println ("Not at document first document line");
+        logger.warn ("Not at document first document line");
         doesAuto = false;
         return;
       }
@@ -171,9 +176,9 @@ public class DownloadDataset extends DefaultPlugin
     else
       currentDocument.addDocumentPage (page);
 
-    System.out.println (currentDocument);
+    logger.debug ("{}", currentDocument);
 
-    System.out.println ("Where to now?");
+    logger.debug ("Where to now?");
     // scroll to next page
     if (page.leftColumn == 1)
     {
@@ -181,14 +186,14 @@ public class DownloadDataset extends DefaultPlugin
       {
         data.key = AIDCommand.AID_PF11;       // go max right
         setMax (data);
-        System.out.println ("go right max");
+        logger.debug ("go right max");
         pendingBottomRight = true;
         return;
       }
       else
       {
         data.key = AIDCommand.AID_PF8;        // go down
-        System.out.println ("go down");
+        logger.debug ("go down");
         return;
       }
     }
@@ -199,14 +204,14 @@ public class DownloadDataset extends DefaultPlugin
         data.key = AIDCommand.AID_PF10;       // go left (assumes only one circuit)
         setMax (data);
         doesAuto = false;
-        System.out.println ("go left max");
+        logger.debug ("go left max");
         saveDocument ();
         return;
       }
       else
       {
         data.key = AIDCommand.AID_PF7;        // go up
-        System.out.println ("go up");
+        logger.debug ("go up");
         return;
       }
     }
@@ -240,8 +245,8 @@ public class DownloadDataset extends DefaultPlugin
     int visitedPagesCount = pageRows + (pageColumns > 1 ? 1 : 0);
     unvisitedPages = pageRows * pageColumns - visitedPagesCount;
 
-    System.out.printf ("Grid %d rows x %d columns%n", pageRows, pageColumns);
-    System.out.printf ("Visited: %d, unvisited: %d%n", visitedPagesCount, unvisitedPages);
+    logger.debug ("Grid {} rows x {} columns", pageRows, pageColumns);
+    logger.debug ("Visited: {}, unvisited: {}", visitedPagesCount, unvisitedPages);
   }
 
   // A captura termina aqui, e ela nao pode depender do toolkit do JavaFX: quem escolhe
@@ -252,7 +257,7 @@ public class DownloadDataset extends DefaultPlugin
       return;
 
     Document document = currentDocument;
-    System.out.println ("Preparando para salvar o documento: " + document.datasetName);
+    logger.info ("Preparando para salvar o documento: {}", document.datasetName);
     documentSaver.accept (document);
   }
 
@@ -274,11 +279,11 @@ public class DownloadDataset extends DefaultPlugin
       for (Document.Line line : document.getLines ())
         writer.println (line.toString ());
 
-      System.out.println ("Documento salvo em: " + file.getAbsolutePath ());
+      logger.info ("Documento salvo em: {}", file.getAbsolutePath ());
     }
     catch (IOException ex)
     {
-      System.out.println ("Erro ao salvar documento: " + ex.getMessage ());
+      logger.error ("Erro ao salvar documento: {}", ex.getMessage (), ex);
     }
   }
 
