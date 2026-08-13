@@ -27,8 +27,6 @@ public class DownloadDataset extends DefaultPlugin
   private boolean doesAuto;
   private boolean doesRequest;
 
-  private int loopCount;
-  private final int maxLoops = 20;
   private DocumentPage previousPage;
 
   private boolean pendingBottomRight;
@@ -66,7 +64,6 @@ public class DownloadDataset extends DefaultPlugin
   {
     currentDocument = null;
     previousPage = null;
-    loopCount = 0;
     pendingBottomRight = false;
 
     DocumentPage page = DocumentPage.createPage (data, getModifiableFields (data));
@@ -113,15 +110,6 @@ public class DownloadDataset extends DefaultPlugin
   @Override
   public void processAuto (PluginData data)
   {
-    logger.debug ("Loopcount {}", loopCount);
-    if (++loopCount > maxLoops)
-    {
-      logger.warn ("loop count exceeded");
-      doesAuto = false;
-      saveDocument ();
-      return;
-    }
-
     DocumentPage page = DocumentPage.createPage (data, getModifiableFields (data));
     if (page == null)
     {

@@ -419,8 +419,8 @@ class DownloadDatasetTest
     }
 
     @Test
-    @DisplayName ("o limite de vinte iteracoes interrompe uma varredura sem fim")
-    void stopsAfterTwentyLoops ()
+    @DisplayName ("nao existe mais limite de iteracoes, permitindo grandes downloads")
+    void canProcessMoreThanTwentyLoops ()
     {
       DownloadDataset fresh = new DownloadDataset ();
       fresh.activate ();
@@ -428,13 +428,11 @@ class DownloadDatasetTest
       PluginData first = page ("Columns 00073 00144", 1).build ();
       fresh.processRequest (first);        // PF10, sem abrir documento
 
-      // cada tela declara a faixa de colunas seguinte, entao nenhuma pagina se repete;
-      // a guarda e `++loopCount > 20`, logo a 21a chamada e que interrompe
       for (int i = 0; i < 21; i++)
         fresh.processAuto (page (String.format ("Columns %05d %05d", 73 + i * 72,
                                               144 + i * 72), 1).build ());
 
-      assertFalse (fresh.doesAuto (), "o limite de iteracoes deveria ter parado");
+      assertTrue (fresh.doesAuto (), "o loop de iteracoes nao deveria mais parar o processamento");
     }
   }
 
