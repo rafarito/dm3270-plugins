@@ -83,9 +83,8 @@ public class Document
         int limit = Math.min (page.lines.size (), page.numbers.size ());
         for (int i = 0; i < limit; i++)
         {
-          String number = page.numbers.get (i);
           Line line = new Line ();
-          line.text = String.format ("%s %s", number, page.lines.get (i));
+          line.text = page.lines.get (i);
           line.leftColumn = page.leftColumn;
           line.rightColumn = page.rightColumn;
           lines.add (line);
@@ -93,7 +92,7 @@ public class Document
       }
       else
       {
-        int col = page.leftColumn + 6;
+        int col = page.leftColumn - 1;
         String format = "%-" + col + "." + col + "s%s";
         for (String text : page.lines)
         {

@@ -98,16 +98,16 @@ class DocumentTest
   // ---------------------------------------------------------------------------------//
   {
     @Test
-    @DisplayName ("uma pagina da coluna 1 vira 'numero conteudo'")
-    void buildsNumberedLines ()
+    @DisplayName ("uma pagina da coluna 1 vira conteudo puro")
+    void buildsPlainLines ()
     {
       Document document = new Document (leftPage ());
 
       List<Document.Line> lines = document.getLines ();
 
       assertEquals (2, lines.size ());
-      assertEquals ("000100 //JOB1 JOB (ACCT)", lines.get (0).toString ());
-      assertEquals ("000200 //STEP1 EXEC PGM=X", lines.get (1).toString ());
+      assertEquals ("//JOB1 JOB (ACCT)", lines.get (0).toString ());
+      assertEquals ("//STEP1 EXEC PGM=X", lines.get (1).toString ());
     }
 
     @Test
@@ -134,7 +134,7 @@ class DocumentTest
       List<Document.Line> lines = document.getLines ();
 
       assertEquals (2, lines.size ());
-      assertTrue (lines.get (0).toString ().startsWith ("000100 //JOB1 JOB (ACCT)"),
+      assertTrue (lines.get (0).toString ().startsWith ("//JOB1 JOB (ACCT)"),
           lines.get (0).toString ());
       assertTrue (lines.get (0).toString ().endsWith ("CONTINUACAO1"),
           lines.get (0).toString ());
@@ -154,9 +154,9 @@ class DocumentTest
 
       String line = document.getLines ().get (0).toString ();
 
-      // 73 (coluna esquerda) + 6 (largura do numero de linha) = 79 caracteres de prefixo
-      assertEquals (79 + 1, line.length ());
-      assertEquals ('X', line.charAt (79));
+      // 73 (coluna esquerda) - 1 = 72 caracteres de prefixo
+      assertEquals (72 + 1, line.length ());
+      assertEquals ('X', line.charAt (72));
     }
 
     @Test
