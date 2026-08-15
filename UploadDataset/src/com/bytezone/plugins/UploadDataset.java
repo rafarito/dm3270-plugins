@@ -234,9 +234,9 @@ public class UploadDataset extends DefaultPlugin
   private void issueInsertCommand (PluginData data)
   // ---------------------------------------------------------------------------------//
   {
-    // Procura o primeiro campo de numero de linha (input, col ~1, len 6)
-    // e digita I + numero de linhas a inserir
-    PluginField numberField = findFirstNumberField (data);
+    // Procura o ULTIMO campo de numero de linha (input, col ~1, len 6)
+    // para inserir as proximas linhas apos o que ja foi digitado
+    PluginField numberField = findLastNumberField (data);
 
     if (numberField == null)
     {
@@ -405,16 +405,19 @@ public class UploadDataset extends DefaultPlugin
   }
 
   /**
-   * Encontra o primeiro campo de numero de linha (input, col ~1, len 6).
+   * Encontra o ultimo campo de numero de linha (input, col ~1, len 6) na tela.
    * Campos marcadores (******) sao ignorados, exceto "Top of Data" que e
    * guardado como fallback para datasets vazios — o ISPF aceita o comando
    * I nessa linha mas rejeita em "Bottom of Data".
+   * Ao usar a ultima linha, garantimos que blocos de inserts subsequentes
+   * appendam linhas ao final da tela, e nao no meio dos dados.
    */
   // ---------------------------------------------------------------------------------//
-  PluginField findFirstNumberField (PluginData data)
+  PluginField findLastNumberField (PluginData data)
   // ---------------------------------------------------------------------------------//
   {
     PluginField topOfDataField = null;
+    PluginField lastDataField = null;
 
     for (PluginField field : data.screenFields)
     {
@@ -434,9 +437,12 @@ public class UploadDataset extends DefaultPlugin
         }
 
         // Campo de numero regular (000100, 000200 etc.)
-        return field;
+        lastDataField = field;
       }
     }
+
+    if (lastDataField != null)
+      return lastDataField;
 
     // Nenhuma linha de dados — usar Top of Data se disponivel
     return topOfDataField;

@@ -117,15 +117,17 @@ class UploadDatasetTest
   @Nested class NumberField
   // ---------------------------------------------------------------------------------//
   {
-    @Test void findsFirstNumberField ()
+    @Test void findsLastNumberField ()
     {
       UploadDataset plugin = createPlugin ();
       PluginData data = editScreenWithData ();
 
-      PluginField numField = plugin.findFirstNumberField (data);
+      PluginField numField = plugin.findLastNumberField (data);
       assertNotNull (numField);
       assertFalse (numField.isProtected);
       assertEquals (6, numField.getLength ());
+      // Deve encontrar a ultima linha de dados na tela (000300)
+      assertEquals ("000300", numField.getFieldValue ().trim ());
     }
 
     @Test void skipsHeaderFields ()
@@ -133,7 +135,7 @@ class UploadDatasetTest
       UploadDataset plugin = createPlugin ();
       PluginData data = editScreenWithData ();
 
-      PluginField numField = plugin.findFirstNumberField (data);
+      PluginField numField = plugin.findLastNumberField (data);
       // Deve estar na row >= 2 (abaixo do header)
       assertTrue (numField.location.row >= 2);
     }
@@ -143,8 +145,8 @@ class UploadDatasetTest
       UploadDataset plugin = createPlugin ();
       PluginData data = editScreenWithData ();
 
-      PluginField numField = plugin.findFirstNumberField (data);
-      // Deve retornar a primeira linha de dados, nao o marcador
+      PluginField numField = plugin.findLastNumberField (data);
+      // Deve retornar a ultima linha de dados, nao o marcador
       String value = numField.getFieldValue ();
       assertNotEquals ("******", value.trim ());
     }
@@ -154,7 +156,7 @@ class UploadDatasetTest
       UploadDataset plugin = createPlugin ();
       PluginData data = editScreenEmpty ();
 
-      PluginField numField = plugin.findFirstNumberField (data);
+      PluginField numField = plugin.findLastNumberField (data);
       // Deve retornar o Top of Data como fallback
       assertNotNull (numField);
       assertEquals ("******", numField.getFieldValue ().trim ());
