@@ -24,6 +24,7 @@
     <module>ShowFields</module>
     <module>FanLogon</module>
     <module>FanLogoff</module>
+    <module>UploadDataset</module>
   </modules>
 
   <properties>
