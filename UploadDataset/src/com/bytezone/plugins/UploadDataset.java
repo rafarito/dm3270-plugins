@@ -1,7 +1,9 @@
 package com.bytezone.plugins;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.function.BiConsumer;
 import java.util.regex.Pattern;
@@ -28,12 +30,34 @@ public class UploadDataset extends DefaultPlugin
   private static final Pattern EDIT_PATTERN = Pattern.compile (
       "(?i).*EDIT\\b.*");
 
+  /** Prefixo que o ISPF poe nas linhas inseridas e ainda nao confirmadas. */
+  static final String INSERT_PREFIX = "''''''";
+
+  /** Prefixo dos marcadores Top of Data / Bottom of Data. */
+  static final String MARKER_PREFIX = "******";
+
+  /** Primeira linha da tela que pode conter dados (0 = titulo, 1 = Command/Scroll). */
+  private static final int FIRST_DATA_ROW = 2;
+
+  /** Usado quando a tela nao permite deduzir quantas linhas cabem. */
+  private static final int DEFAULT_BLOCK_SIZE = 20;
+
+  /**
+   * Quantas telas seguidas podem chegar sem que uma unica linha avance antes de
+   * desistirmos. O ciclo normal gasta ate tres (POSITIONING, INSERTING_CMD e o
+   * proprio SAVING), entao seis da margem sem deixar o plugin girar em falso.
+   */
+  private static final int MAX_STALLED_TICKS = 6;
+
   private boolean doesAuto;
   private boolean doesRequest;
 
   private UploadContext context;
   private UploadState state = UploadState.IDLE;
   private UploadStage uploadStage;
+
+  private int stalledTicks;
+  private int lastLinesSent;
 
   // ---------------------------------------------------------------------------------//
   enum UploadState
@@ -42,6 +66,7 @@ public class UploadDataset extends DefaultPlugin
     IDLE,             // Esperando o usuario ativar
     DELETING,         // DELETE ALL enviado, esperando confirmacao
     GOING_BOTTOM,     // BOTTOM enviado (modo append), esperando tela
+    POSITIONING,      // LOCATE enviado para trazer a ancora ao topo da tela
     INSERTING_CMD,    // Comando INSERT enviado, esperando linhas em branco
     FILLING_LINES,    // Preenchendo linhas em branco com conteudo
     SAVING,           // SAVE enviado, esperando confirmacao
@@ -66,6 +91,7 @@ public class UploadDataset extends DefaultPlugin
     doesRequest = false;
     state = UploadState.IDLE;
     context = null;
+    resetProgress ();
   }
 
   // ---------------------------------------------------------------------------------//
@@ -147,17 +173,19 @@ public class UploadDataset extends DefaultPlugin
       return;
     }
 
+    resetProgress ();
+
     if (context.getMode () == UploadContext.UploadMode.REPLACE)
     {
       // DELETE ALL NX: apaga tudo sem pedir confirmacao
-      commandField.change ("DELETE ALL NX", data);
+      write (commandField, "DELETE ALL NX", data);
       data.setKey (AIDCommand.AID_ENTER);
       state = UploadState.DELETING;
     }
     else
     {
       // Modo APPEND: ir para o final do dataset
-      commandField.change ("BOTTOM", data);
+      write (commandField, "BOTTOM", data);
       data.setKey (AIDCommand.AID_ENTER);
       state = UploadState.GOING_BOTTOM;
     }
@@ -175,10 +203,18 @@ public class UploadDataset extends DefaultPlugin
 
     if (!isEditScreen (data))
     {
-      logger.warn ("Tela nao e EDIT — abortando upload");
-      abort ();
+      abort ("A tela deixou de ser o ISPF EDIT.");
       return;
     }
+
+    if (context == null)
+    {
+      abort ("Estado interno inconsistente: nenhum upload em andamento.");
+      return;
+    }
+
+    if (!checkProgress ())
+      return;
 
     switch (state)
     {
@@ -188,6 +224,10 @@ public class UploadDataset extends DefaultPlugin
 
       case GOING_BOTTOM:
         handlePostBottom (data);
+        break;
+
+      case POSITIONING:
+        handlePostPosition (data);
         break;
 
       case INSERTING_CMD:
@@ -203,8 +243,7 @@ public class UploadDataset extends DefaultPlugin
         break;
 
       default:
-        logger.warn ("Estado inesperado: {}", state);
-        abort ();
+        abort ("Estado inesperado da maquina de upload: " + state);
         break;
     }
   }
@@ -217,8 +256,15 @@ public class UploadDataset extends DefaultPlugin
   private void handlePostDelete (PluginData data)
   // ---------------------------------------------------------------------------------//
   {
-    // Apos DELETE ALL, o dataset esta vazio.
-    // Agora precisamos inserir as linhas.
+    String message = findShortMessage (data);
+    if (isErrorMessage (message))
+    {
+      abort ("O ISPF recusou o DELETE ALL: " + message);
+      return;
+    }
+
+    // O dataset ficou vazio: o Top of Data ja esta no topo da tela, entao da
+    // para inserir direto, sem reposicionar.
     issueInsertCommand (data);
   }
 
@@ -226,37 +272,72 @@ public class UploadDataset extends DefaultPlugin
   private void handlePostBottom (PluginData data)
   // ---------------------------------------------------------------------------------//
   {
-    // Estamos no final do dataset. Inserir linhas aqui.
+    // O BOTTOM deixa a ultima linha no rodape da tela, sem espaco abaixo dela
+    // para as linhas inseridas aparecerem — reposicionar antes de inserir.
+    repositionAndInsert (data);
+  }
+
+  // ---------------------------------------------------------------------------------//
+  private void handlePostPosition (PluginData data)
+  // ---------------------------------------------------------------------------------//
+  {
     issueInsertCommand (data);
+  }
+
+  /**
+   * Traz a ultima linha de dados para o topo do display com LOCATE, de modo que
+   * o I<n> seguinte tenha a tela inteira livre abaixo da ancora. Sem isso o ISPF
+   * insere linhas fora da area visivel e o preenchimento nao acha nada.
+   */
+  // ---------------------------------------------------------------------------------//
+  private void repositionAndInsert (PluginData data)
+  // ---------------------------------------------------------------------------------//
+  {
+    PluginField numberField = findLastNumberField (data);
+    PluginField commandField = findCommandField (data);
+
+    String lineNumber = numberField == null ? "" : trimmed (numberField);
+
+    if (commandField == null || !lineNumber.matches ("\\d+"))
+    {
+      // Sem numero de linha para ancorar (dataset vazio, por exemplo): a tela ja
+      // esta no lugar certo, entao insere de onde estamos.
+      issueInsertCommand (data);
+      return;
+    }
+
+    write (commandField, "LOCATE " + lineNumber, data);
+    data.setKey (AIDCommand.AID_ENTER);
+    state = UploadState.POSITIONING;
   }
 
   // ---------------------------------------------------------------------------------//
   private void issueInsertCommand (PluginData data)
   // ---------------------------------------------------------------------------------//
   {
+    int lines = Math.min (context.getLinesRemaining (), blockSize (data));
+
     // Procura o ULTIMO campo de numero de linha (input, col ~1, len 6)
     // para inserir as proximas linhas apos o que ja foi digitado
     PluginField numberField = findLastNumberField (data);
 
-    if (numberField == null)
+    if (numberField != null)
     {
-      // Se nao ha linhas (dataset vazio apos DELETE ALL), usar Command "I"
-      PluginField commandField = findCommandField (data);
-      if (commandField != null)
-      {
-        int blockSize = Math.min (context.getLinesRemaining (), 20);
-        commandField.change ("I" + blockSize, data);
-        data.setKey (AIDCommand.AID_ENTER);
-        state = UploadState.INSERTING_CMD;
-        return;
-      }
-      logger.error ("Nao encontrou campo de numero nem de comando");
-      abort ();
+      write (numberField, "I" + lines, data);
+      data.setKey (AIDCommand.AID_ENTER);
+      state = UploadState.INSERTING_CMD;
       return;
     }
 
-    int blockSize = Math.min (context.getLinesRemaining (), 20);
-    numberField.change ("I" + blockSize, data);
+    // Se nao ha linhas (dataset vazio apos DELETE ALL), usar Command "I"
+    PluginField commandField = findCommandField (data);
+    if (commandField == null)
+    {
+      abort ("Não foi encontrado campo de número nem de comando para inserir.");
+      return;
+    }
+
+    write (commandField, "I" + lines, data);
     data.setKey (AIDCommand.AID_ENTER);
     state = UploadState.INSERTING_CMD;
   }
@@ -267,7 +348,19 @@ public class UploadDataset extends DefaultPlugin
   {
     // Apos o comando I<n>, o ISPF insere linhas em branco
     // Precisamos preenche-las com o conteudo do arquivo
-    fillEmptyLines (data);
+    List<PluginField> emptyFields = findEmptyInsertLines (data);
+
+    if (emptyFields.isEmpty ())
+    {
+      // O INSERT nao produziu linhas visiveis. Devolve a tela e deixa a guarda
+      // de progresso encerrar se isso se repetir.
+      logger.warn ("Nenhuma linha em branco encontrada apos o INSERT");
+      data.setKey (AIDCommand.AID_ENTER);
+      state = UploadState.FILLING_LINES;
+      return;
+    }
+
+    fillEmptyLines (data, emptyFields);
   }
 
   // ---------------------------------------------------------------------------------//
@@ -278,40 +371,55 @@ public class UploadDataset extends DefaultPlugin
     {
       // Upload concluido — salvar
       PluginField commandField = findCommandField (data);
-      if (commandField != null)
+      if (commandField == null)
       {
-        commandField.change ("SAVE", data);
-        data.setKey (AIDCommand.AID_ENTER);
-        state = UploadState.SAVING;
+        abort ("Campo de comando não encontrado para gravar (SAVE).");
+        return;
       }
-      else
-        abort ();
+
+      write (commandField, "SAVE", data);
+      data.setKey (AIDCommand.AID_ENTER);
+      state = UploadState.SAVING;
       return;
     }
 
-    // Verificar se ha linhas em branco restantes na tela
     List<PluginField> emptyFields = findEmptyInsertLines (data);
-    if (!emptyFields.isEmpty ())
-    {
-      // Ainda ha linhas em branco — preencher
-      fillEmptyLines (data);
-    }
+    int remaining = context.getLinesRemaining ();
+    int useful = Math.min (remaining, blockSize (data));
+
+    // A cada ENTER o ISPF emenda UMA linha de continuacao depois da ultima linha
+    // preenchida. Aceitar essa linha sozinha como se fosse um bloco faz o upload
+    // andar a uma linha por ida-e-volta com o host — que era o comportamento
+    // observado depois do primeiro bloco. So aproveitamos a tela quando ela
+    // carrega pelo menos meio bloco, ou quando o que ha ali termina o arquivo.
+    if (emptyFields.size () >= remaining || emptyFields.size () * 2 >= useful)
+      fillEmptyLines (data, emptyFields);
     else
-    {
-      // Sem linhas em branco — emitir novo INSERT
-      issueInsertCommand (data);
-    }
+      repositionAndInsert (data);
   }
 
   // ---------------------------------------------------------------------------------//
   private void handlePostSave (PluginData data)
   // ---------------------------------------------------------------------------------//
   {
-    logger.info ("Upload concluido! {} linhas enviadas para o mainframe",
-        context.getLinesSent ());
+    String message = findShortMessage (data);
+    if (isErrorMessage (message))
+    {
+      abort ("O ISPF recusou o SAVE: " + message);
+      return;
+    }
+
+    int sent = context.getLinesSent ();
+    logger.info ("Upload concluido! {} linhas enviadas para o mainframe", sent);
+
     doesAuto = false;
     state = UploadState.DONE;
     context = null;
+    resetProgress ();
+
+    showAlert (AlertType.INFORMATION, String.format (
+        "Upload concluído: %d linhas enviadas.%s", sent,
+        message.isEmpty () ? "" : String.format ("%n%nISPF: %s", message)));
   }
 
   // ---------------------------------------------------------------
@@ -319,26 +427,16 @@ public class UploadDataset extends DefaultPlugin
   // ---------------------------------------------------------------
 
   // ---------------------------------------------------------------------------------//
-  private void fillEmptyLines (PluginData data)
+  private void fillEmptyLines (PluginData data, List<PluginField> emptyFields)
   // ---------------------------------------------------------------------------------//
   {
-    List<PluginField> emptyFields = findEmptyInsertLines (data);
-
-    if (emptyFields.isEmpty ())
-    {
-      // Nenhuma linha em branco encontrada — pode ser que o INSERT
-      // ainda nao foi processado ou layout diferente
-      logger.warn ("Nenhuma linha em branco encontrada para preencher");
-      data.setKey (AIDCommand.AID_ENTER);
-      state = UploadState.FILLING_LINES;
-      return;
-    }
-
     // Pegar bloco de linhas do contexto
     List<String> block = context.getNextBlock (emptyFields.size ());
 
     for (int i = 0; i < block.size () && i < emptyFields.size (); i++)
     {
+      // Sem padding: estas linhas foram recem inseridas pelo ISPF e estao
+      // comprovadamente vazias, entao nao ha residuo para cobrir.
       emptyFields.get (i).change (block.get (i), data);
     }
 
@@ -405,12 +503,72 @@ public class UploadDataset extends DefaultPlugin
   }
 
   /**
+   * Le a mensagem curta do ISPF — o texto que aparece a direita nas duas
+   * primeiras linhas da tela ("Member X saved", "Save error" etc). Devolve
+   * string vazia quando nao ha mensagem: nem todo ISPF emite uma.
+   */
+  // ---------------------------------------------------------------------------------//
+  String findShortMessage (PluginData data)
+  // ---------------------------------------------------------------------------------//
+  {
+    String message = "";
+
+    for (PluginField field : data.screenFields)
+    {
+      if (!field.isProtected || field.location.row >= FIRST_DATA_ROW
+          || field.location.column < 40)
+        continue;
+
+      String value = trimmed (field);
+      String lower = value.toLowerCase ();
+
+      // Descarta os rotulos fixos do cabecalho do EDIT
+      if (value.isEmpty () || lower.startsWith ("columns")
+          || lower.startsWith ("col ") || lower.startsWith ("scroll"))
+        continue;
+
+      message = value;
+    }
+
+    return message;
+  }
+
+  // ---------------------------------------------------------------------------------//
+  static boolean isErrorMessage (String message)
+  // ---------------------------------------------------------------------------------//
+  {
+    String lower = message.toLowerCase ();
+    return lower.contains ("error") || lower.contains ("invalid");
+  }
+
+  /**
+   * Quantas linhas de dados cabem na area visivel, deduzido da maior linha
+   * ocupada na tela — assim os modos de 32 e 43 linhas rendem blocos maiores em
+   * vez de ficarem presos aos 20 de uma tela 24x80.
+   *
+   * Nunca desce abaixo de {@value #DEFAULT_BLOCK_SIZE}: numa tela esparsa (um
+   * dataset recem esvaziado so tem os dois marcadores) a maior linha ocupada nao
+   * diz nada sobre a altura real do terminal, e encolher o bloco ali seria
+   * justamente recriar o upload linha a linha.
+   */
+  // ---------------------------------------------------------------------------------//
+  int blockSize (PluginData data)
+  // ---------------------------------------------------------------------------------//
+  {
+    int maxRow = 0;
+    for (PluginField field : data.screenFields)
+      if (field.location.row > maxRow)
+        maxRow = field.location.row;
+
+    return Math.max (maxRow - FIRST_DATA_ROW, DEFAULT_BLOCK_SIZE);
+  }
+
+  /**
    * Encontra o ultimo campo de numero de linha (input, col ~1, len 6) na tela.
-   * Campos marcadores (******) sao ignorados, exceto "Top of Data" que e
-   * guardado como fallback para datasets vazios — o ISPF aceita o comando
-   * I nessa linha mas rejeita em "Bottom of Data".
-   * Ao usar a ultima linha, garantimos que blocos de inserts subsequentes
-   * appendam linhas ao final da tela, e nao no meio dos dados.
+   * Marcadores (******) e linhas de insercao pendente ('''''') sao ignorados —
+   * ancorar o I<n> numa delas colocaria o bloco no lugar errado. O primeiro
+   * marcador e guardado como fallback para datasets vazios: o ISPF aceita o
+   * comando I no "Top of Data" mas o rejeita no "Bottom of Data".
    */
   // ---------------------------------------------------------------------------------//
   PluginField findLastNumberField (PluginData data)
@@ -421,24 +579,24 @@ public class UploadDataset extends DefaultPlugin
 
     for (PluginField field : data.screenFields)
     {
-      if (!field.isProtected && field.location.column <= 1
-          && field.getLength () == 6
-          && field.location.row >= 2)  // Abaixo do header (row 0-1)
+      if (!isPrefixField (field))
+        continue;
+
+      String value = trimmed (field);
+
+      if (MARKER_PREFIX.equals (value))
       {
-        String value = field.getFieldValue () == null ? ""
-            : field.getFieldValue ().trim ();
-
-        if ("******".equals (value))
-        {
-          // Guardar o primeiro marcador (Top of Data) como fallback
-          if (topOfDataField == null)
-            topOfDataField = field;
-          continue;
-        }
-
-        // Campo de numero regular (000100, 000200 etc.)
-        lastDataField = field;
+        // Guardar o primeiro marcador (Top of Data) como fallback
+        if (topOfDataField == null)
+          topOfDataField = field;
+        continue;
       }
+
+      if (INSERT_PREFIX.equals (value))
+        continue;
+
+      // Campo de numero regular (000100, 000200 etc.)
+      lastDataField = field;
     }
 
     if (lastDataField != null)
@@ -449,27 +607,40 @@ public class UploadDataset extends DefaultPlugin
   }
 
   /**
-   * Encontra linhas em branco inseridas pelo comando I.
-   * No ISPF EDIT, linhas inseridas aparecem como campos de conteudo
-   * vazios ou com espacos, na area de conteudo (col > 6, col < 15).
+   * Encontra as linhas inseridas pelo comando I e ainda em branco. O criterio e
+   * o prefixo '''''' da propria linha, e nao apenas "campo de conteudo vazio":
+   * linhas em branco que ja existiam no dataset — ou que acabamos de gravar a
+   * partir do arquivo — tambem tem conteudo vazio, e seriam sobrescritas com o
+   * bloco seguinte, embaralhando a ordem do upload.
    */
   // ---------------------------------------------------------------------------------//
   List<PluginField> findEmptyInsertLines (PluginData data)
   // ---------------------------------------------------------------------------------//
   {
-    List<PluginField> emptyLines = new ArrayList<> ();
-    List<PluginField> modifiable = getModifiableFields (data);
+    Map<Integer, String> prefixes = new HashMap<> ();
+    List<PluginField> contentFields = new ArrayList<> ();
 
-    for (PluginField field : modifiable)
+    for (PluginField field : getModifiableFields (data))
     {
-      // Campos de conteudo: column > 6, column < 15
-      if (field.location.column > 6 && field.location.column < 15
-          && field.location.row >= 3)
-      {
-        String value = field.getFieldValue ();
-        if (value == null || value.trim ().isEmpty ())
-          emptyLines.add (field);
-      }
+      if (field.location.row < FIRST_DATA_ROW)
+        continue;
+
+      if (isPrefixField (field))
+        prefixes.put (field.location.row, trimmed (field));
+      else if (field.location.column > 6 && field.location.column < 15)
+        contentFields.add (field);
+    }
+
+    List<PluginField> emptyLines = new ArrayList<> ();
+
+    for (PluginField field : contentFields)
+    {
+      if (!INSERT_PREFIX.equals (prefixes.get (field.location.row)))
+        continue;
+
+      String value = field.getFieldValue ();
+      if (value == null || value.trim ().isEmpty ())
+        emptyLines.add (field);
     }
 
     return emptyLines;
@@ -479,14 +650,103 @@ public class UploadDataset extends DefaultPlugin
   // Utilitarios
   // ---------------------------------------------------------------
 
+  /** Campo de prefixo de linha: input de 6 posicoes na margem esquerda. */
   // ---------------------------------------------------------------------------------//
-  private void abort ()
+  private static boolean isPrefixField (PluginField field)
   // ---------------------------------------------------------------------------------//
   {
-    logger.warn ("Upload abortado");
+    return !field.isProtected && field.location.column <= 1
+        && field.getLength () == 6 && field.location.row >= FIRST_DATA_ROW;
+  }
+
+  // ---------------------------------------------------------------------------------//
+  private static String trimmed (PluginField field)
+  // ---------------------------------------------------------------------------------//
+  {
+    String value = field.getFieldValue ();
+    return value == null ? "" : value.trim ();
+  }
+
+  /**
+   * Escreve num campo completando com espacos ate o tamanho exato dele.
+   * {@code PluginsStage.processReply} grava com {@code Field.setText(byte[])},
+   * que nao apaga o campo antes: sem o preenchimento, um "I20" sobre um prefixo
+   * "000300" chegaria ao ISPF como "I20300".
+   */
+  // ---------------------------------------------------------------------------------//
+  static void write (PluginField field, String text, PluginData data)
+  // ---------------------------------------------------------------------------------//
+  {
+    int length = field.getLength ();
+    String value = text.length () > length ? text.substring (0, length)
+        : text + " ".repeat (length - text.length ());
+
+    field.change (value, data);
+  }
+
+  /**
+   * Conta as telas que chegaram sem que nenhuma linha avancasse. Sem isso, um
+   * INSERT que nao produz linhas em branco faz o plugin alternar entre estados
+   * batendo ENTER indefinidamente.
+   *
+   * @return false quando o upload foi abortado por falta de progresso
+   */
+  // ---------------------------------------------------------------------------------//
+  private boolean checkProgress ()
+  // ---------------------------------------------------------------------------------//
+  {
+    int sent = context.getLinesSent ();
+
+    if (sent > lastLinesSent)
+    {
+      lastLinesSent = sent;
+      stalledTicks = 0;
+      return true;
+    }
+
+    if (++stalledTicks >= MAX_STALLED_TICKS)
+    {
+      abort (String.format (
+          "O upload parou de progredir (%d telas sem avançar).",
+          MAX_STALLED_TICKS));
+      return false;
+    }
+
+    return true;
+  }
+
+  // ---------------------------------------------------------------------------------//
+  private void resetProgress ()
+  // ---------------------------------------------------------------------------------//
+  {
+    stalledTicks = 0;
+    lastLinesSent = 0;
+  }
+
+  // ---------------------------------------------------------------------------------//
+  private void abort (String reason)
+  // ---------------------------------------------------------------------------------//
+  {
+    logger.warn ("Upload abortado: {}", reason);
+
+    StringBuilder message = new StringBuilder (reason);
+
+    if (context != null)
+    {
+      message.append (String.format ("%n%nLinhas enviadas: %d de %d.",
+          context.getLinesSent (), context.getTotalLines ()));
+
+      if (context.getMode () == UploadContext.UploadMode.REPLACE)
+        message.append (String.format ("%nO DELETE ALL já tinha sido executado — "
+            + "use CANCEL no ISPF para descartar a sessão de edição."));
+    }
+
     doesAuto = false;
     state = UploadState.IDLE;
     context = null;
+    resetProgress ();
+
+    showAlert (AlertType.ERROR, message.toString ());
   }
 
   // ---------------------------------------------------------------------------------//
@@ -515,6 +775,7 @@ public class UploadDataset extends DefaultPlugin
   // ---------------------------------------------------------------------------------//
   {
     this.context = context;
+    resetProgress ();
   }
 
   // ---------------------------------------------------------------------------------//

@@ -7,7 +7,10 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import com.bytezone.dm3270.commands.AIDCommand;
 import com.bytezone.dm3270.plugins.PluginData;
@@ -21,6 +24,9 @@ class UploadDatasetTest
 // -----------------------------------------------------------------------------------//
 {
   @TempDir Path tempDir;
+
+  /** Alertas emitidos pelo plugin durante o teste, no lugar do dialogo do JavaFX. */
+  private final List<String> alerts = new ArrayList<> ();
 
   // ---------------------------------------------------------------------------------//
   @Nested class ScreenDetection
@@ -163,6 +169,21 @@ class UploadDatasetTest
       // Deve ser row 2 (Top of Data), nao row 3 (Bottom of Data)
       assertEquals (2, numField.location.row);
     }
+
+    /** Ancorar o I<n> numa insercao pendente colocaria o bloco no lugar errado. */
+    @Test void skipsPendingInsertLines ()
+    {
+      UploadDataset plugin = createPlugin ();
+      PluginData data = ScreenBuilder
+          .ispfEditScreen ("EDIT  USER1.SRC(TEST)", "Columns 00001 00072")
+          .dataLine (3, "000100", "PRIMEIRA")
+          .dataLine (4, "000200", "SEGUNDA")
+          .insertLine (5)
+          .build ();
+
+      assertEquals ("000200",
+          plugin.findLastNumberField (data).getFieldValue ().trim ());
+    }
   }
 
   // ---------------------------------------------------------------------------------//
@@ -185,6 +206,107 @@ class UploadDatasetTest
 
       List<PluginField> emptyLines = plugin.findEmptyInsertLines (data);
       assertEquals (0, emptyLines.size ());
+    }
+
+    /**
+     * Uma linha em branco que ja existia no dataset tem conteudo vazio igual ao
+     * de uma linha inserida — o que a distingue e o prefixo.
+     */
+    @Test void ignoresBlankLinesWithoutTheInsertPrefix ()
+    {
+      UploadDataset plugin = createPlugin ();
+      PluginData data = ScreenBuilder
+          .ispfEditScreen ("EDIT  USER1.SRC(TEST)", "Columns 00001 00072")
+          .dataLine (3, "000100", "PRIMEIRA")
+          .dataLine (4, "000200", "")          // ja existia, em branco
+          .insertLine (5)                      // recem inserida
+          .build ();
+
+      List<PluginField> emptyLines = plugin.findEmptyInsertLines (data);
+      assertEquals (1, emptyLines.size ());
+      assertEquals (5, emptyLines.get (0).location.row);
+    }
+  }
+
+  // ---------------------------------------------------------------------------------//
+  @Nested class FieldPadding
+  // ---------------------------------------------------------------------------------//
+  {
+    /**
+     * processReply grava com Field.setText(byte[]), que nao apaga o campo antes:
+     * sem preencher ate o fim, o "I2" deixaria o resto de "000300" para tras e o
+     * ISPF leria "I20300".
+     */
+    @Test void insertCommandCoversTheWholeNumberField () throws IOException
+    {
+      UploadDataset plugin = createPlugin ();
+      UploadContext ctx = createContext ("uma", "duas");
+      ctx.prepare ();
+      plugin.setContext (ctx);
+      plugin.setState (UploadDataset.UploadState.POSITIONING);
+      plugin.setDoesAuto (true);
+
+      PluginData data = editScreenWithData ();
+      plugin.processAuto (data);
+
+      PluginField numberField = plugin.findLastNumberField (data);
+      assertEquals (6, numberField.newData.length ());
+      assertEquals ("I2    ", numberField.newData);
+    }
+
+    @Test void saveCommandCoversTheWholeCommandField () throws IOException
+    {
+      UploadDataset plugin = createPlugin ();
+      UploadContext ctx = createContext ("unica");
+      ctx.prepare ();
+      ctx.getNextBlock (1);
+      plugin.setContext (ctx);
+      plugin.setState (UploadDataset.UploadState.FILLING_LINES);
+      plugin.setDoesAuto (true);
+
+      PluginData data = editScreen ("EDIT  USER1.SRC(TEST)");
+      plugin.processAuto (data);
+
+      PluginField commandField = plugin.findCommandField (data);
+      assertEquals (40, commandField.newData.length ());
+      assertEquals ("SAVE", commandField.newData.trim ());
+    }
+
+    @Test void truncatesTextLongerThanTheField ()
+    {
+      PluginData data = editScreen ("EDIT  USER1.SRC(TEST)");
+      PluginField field = data.screenFields.get (5);        // scroll, 8 posicoes
+
+      UploadDataset.write (field, "UM TEXTO BEM MAIOR", data);
+
+      assertEquals (8, field.newData.length ());
+      assertEquals ("UM TEXTO", field.newData);
+    }
+  }
+
+  // ---------------------------------------------------------------------------------//
+  @Nested class BlockSizing
+  // ---------------------------------------------------------------------------------//
+  {
+    @Test void fallsBackToTwentyOnASparseScreen ()
+    {
+      UploadDataset plugin = createPlugin ();
+
+      // Um dataset recem esvaziado so mostra os dois marcadores: a maior linha
+      // ocupada nao diz nada sobre a altura do terminal.
+      assertEquals (20, plugin.blockSize (editScreenEmpty ()));
+    }
+
+    @Test void growsWithATallerScreen ()
+    {
+      UploadDataset plugin = createPlugin ();
+
+      ScreenBuilder sb = ScreenBuilder
+          .ispfEditScreen ("EDIT  USER1.SRC(TEST)", "Columns 00001 00072");
+      for (int row = 3; row <= 42; row++)
+        sb.dataLine (row, String.format ("%06d", row * 100), "X");
+
+      assertEquals (40, plugin.blockSize (sb.build ()));
     }
   }
 
@@ -211,13 +333,35 @@ class UploadDatasetTest
       assertEquals (AIDCommand.AID_ENTER, data.getKey ());
     }
 
-    @Test void processAutoGoingBottomTransitionsToInsert () throws IOException
+    /**
+     * O BOTTOM deixa a ultima linha no rodape, sem espaco abaixo dela para as
+     * linhas inseridas aparecerem — por isso o LOCATE vem antes do I<n>.
+     */
+    @Test void processAutoGoingBottomRepositionsFirst () throws IOException
     {
       UploadDataset plugin = createPlugin ();
       UploadContext ctx = createContext ("line1");
       ctx.prepare ();
       plugin.setContext (ctx);
       plugin.setState (UploadDataset.UploadState.GOING_BOTTOM);
+      plugin.setDoesAuto (true);
+
+      PluginData data = editScreenWithData ();
+
+      plugin.processAuto (data);
+
+      assertEquals (UploadDataset.UploadState.POSITIONING, plugin.getState ());
+      assertEquals ("LOCATE 000300",
+          plugin.findCommandField (data).newData.trim ());
+    }
+
+    @Test void processAutoPositioningTransitionsToInsert () throws IOException
+    {
+      UploadDataset plugin = createPlugin ();
+      UploadContext ctx = createContext ("line1");
+      ctx.prepare ();
+      plugin.setContext (ctx);
+      plugin.setState (UploadDataset.UploadState.POSITIONING);
       plugin.setDoesAuto (true);
 
       PluginData data = editScreenWithData ();
@@ -299,6 +443,294 @@ class UploadDatasetTest
     }
   }
 
+  // ---------------------------------------------------------------------------------//
+  @Nested class BlockThroughput
+  // ---------------------------------------------------------------------------------//
+  {
+    /**
+     * O ISPF emenda UMA linha de continuacao a cada ENTER. Preenche-la sozinha e
+     * o que fazia o upload andar a uma linha por ida-e-volta depois do primeiro
+     * bloco: o plugin tem de pedir um bloco novo em vez de aproveita-la.
+     */
+    @Test void doesNotFillTheLoneContinuationLine () throws IOException
+    {
+      UploadDataset plugin = createPlugin ();
+      UploadContext ctx = createContext (numberedLines (50));
+      ctx.prepare ();
+      plugin.setContext (ctx);
+      plugin.setState (UploadDataset.UploadState.FILLING_LINES);
+      plugin.setDoesAuto (true);
+
+      PluginData data = fullScreenWithContinuationLine ();
+
+      plugin.processAuto (data);
+
+      assertEquals (UploadDataset.UploadState.POSITIONING, plugin.getState ());
+      assertEquals (0, ctx.getLinesSent ());
+    }
+
+    @Test void fillsAWholeScreenOfInsertLinesAtOnce () throws IOException
+    {
+      UploadDataset plugin = createPlugin ();
+      UploadContext ctx = createContext (numberedLines (50));
+      ctx.prepare ();
+      plugin.setContext (ctx);
+      plugin.setState (UploadDataset.UploadState.FILLING_LINES);
+      plugin.setDoesAuto (true);
+
+      ScreenBuilder sb = ScreenBuilder
+          .ispfEditScreen ("EDIT  USER1.SRC(TEST)", "Columns 00001 00072");
+      for (int row = 3; row <= 22; row++)
+        sb.insertLine (row);
+
+      plugin.processAuto (sb.build ());
+
+      assertEquals (UploadDataset.UploadState.FILLING_LINES, plugin.getState ());
+      assertEquals (20, ctx.getLinesSent ());
+    }
+
+    /** No fim do arquivo um bloco parcial e o que ha — nao se pede outro. */
+    @Test void fillsTheTailEvenWhenSmallerThanABlock () throws IOException
+    {
+      UploadDataset plugin = createPlugin ();
+      UploadContext ctx = createContext ("A", "B", "C");
+      ctx.prepare ();
+      plugin.setContext (ctx);
+      plugin.setState (UploadDataset.UploadState.FILLING_LINES);
+      plugin.setDoesAuto (true);
+
+      PluginData data = editScreenWithEmptyLines (3);
+
+      plugin.processAuto (data);
+
+      assertEquals (UploadDataset.UploadState.FILLING_LINES, plugin.getState ());
+      assertEquals (3, ctx.getLinesSent ());
+    }
+
+    /**
+     * Um upload inteiro contra o modelo de ISPF abaixo. Antes da correcao, as 45
+     * linhas custavam uma ida-e-volta cada depois do primeiro bloco.
+     */
+    @Test void wholeUploadStaysUnderADozenRoundTrips () throws IOException
+    {
+      UploadDataset plugin = createPlugin ();
+      String[] source = numberedLines (45);
+
+      UploadContext ctx = createContext (source);
+      ctx.prepare ();
+      plugin.setContext (ctx);
+      plugin.setState (UploadDataset.UploadState.DELETING);
+      plugin.setDoesAuto (true);
+
+      IspfModel ispf = new IspfModel ();
+      int roundTrips = 0;
+
+      while (plugin.doesAuto () && roundTrips < 40)
+      {
+        PluginData data = ispf.screen ();
+        plugin.processAuto (data);
+        ispf.apply (data);
+        ++roundTrips;
+      }
+
+      assertEquals (UploadDataset.UploadState.DONE, plugin.getState (),
+          "alertas: " + alerts);
+      assertTrue (ispf.saved, "o SAVE nunca chegou ao host");
+      assertEquals (List.of (source), ispf.lines);
+      // Medido: 10. O limite deixa folga para ajustes sem esconder uma regressao
+      // para o antigo ritmo de uma linha por ida-e-volta (que daria ~29 aqui).
+      assertTrue (roundTrips <= 12,
+          "gastou " + roundTrips + " idas-e-voltas para 45 linhas");
+    }
+
+    /** A ordem tem de sobreviver a uma linha em branco no meio do arquivo. */
+    @Test void blankLinesInTheFileDoNotShuffleTheUpload () throws IOException
+    {
+      UploadDataset plugin = createPlugin ();
+      UploadContext ctx = createContext ("L1", "", "L3", "L4");
+      ctx.prepare ();
+      plugin.setContext (ctx);
+      plugin.setState (UploadDataset.UploadState.INSERTING_CMD);
+      plugin.setDoesAuto (true);
+
+      PluginData first = editScreenWithEmptyLines (2);
+      plugin.processAuto (first);
+      assertEquals (List.of ("L1", ""), writtenLines (first));
+
+      // A tela volta com as duas gravadas — a segunda em branco — e duas novas
+      // linhas de insercao. A linha em branco nao pode ser reaproveitada.
+      PluginData second = ScreenBuilder
+          .ispfEditScreen ("EDIT  USER1.SRC(TEST)", "Columns 00001 00072")
+          .dataLine (3, "000100", "L1")
+          .dataLine (4, "000200", "")
+          .insertLine (5)
+          .insertLine (6)
+          .build ();
+
+      plugin.processAuto (second);
+      assertEquals (List.of ("L3", "L4"), writtenLines (second));
+    }
+  }
+
+  // ---------------------------------------------------------------------------------//
+  @Nested class ProgressGuard
+  // ---------------------------------------------------------------------------------//
+  {
+    @Test void abortsAfterSixScreensWithoutProgress () throws IOException
+    {
+      UploadDataset plugin = createPlugin ();
+      UploadContext ctx = createContext (numberedLines (50));
+      ctx.prepare ();
+      plugin.setContext (ctx);
+      plugin.setState (UploadDataset.UploadState.INSERTING_CMD);
+      plugin.setDoesAuto (true);
+
+      // Uma tela que nunca oferece linha de insercao nenhuma
+      for (int i = 0; i < 6; i++)
+        plugin.processAuto (editScreen ("EDIT  USER1.SRC(TEST)"));
+
+      assertEquals (UploadDataset.UploadState.IDLE, plugin.getState ());
+      assertFalse (plugin.doesAuto ());
+      assertEquals (1, alerts.size ());
+      assertTrue (alerts.get (0).contains ("parou de progredir"), alerts.get (0));
+    }
+
+    @Test void progressResetsTheCounter () throws IOException
+    {
+      UploadDataset plugin = createPlugin ();
+      UploadContext ctx = createContext (numberedLines (10));
+      ctx.prepare ();
+      plugin.setContext (ctx);
+      plugin.setState (UploadDataset.UploadState.INSERTING_CMD);
+      plugin.setDoesAuto (true);
+
+      // Quatro telas estereis: o contador sobe mas ainda nao estoura
+      for (int i = 0; i < 4; i++)
+        plugin.processAuto (editScreen ("EDIT  USER1.SRC(TEST)"));
+      assertTrue (plugin.doesAuto ());
+
+      // Uma tela que rende linhas
+      plugin.setState (UploadDataset.UploadState.INSERTING_CMD);
+      plugin.processAuto (editScreenWithEmptyLines (3));
+      assertEquals (3, ctx.getLinesSent ());
+
+      // O contador zerou: outras quatro telas estereis nao derrubam o upload
+      for (int i = 0; i < 4; i++)
+        plugin.processAuto (editScreen ("EDIT  USER1.SRC(TEST)"));
+
+      assertTrue (plugin.doesAuto ());
+      assertTrue (alerts.isEmpty (), "alertas inesperados: " + alerts);
+    }
+
+    @Test void abortWarnsThatReplaceAlreadyEmptiedTheDataset () throws IOException
+    {
+      UploadDataset plugin = createPlugin ();
+      UploadContext ctx = createContext ("A");
+      ctx.prepare ();
+      plugin.setContext (ctx);
+      plugin.setState (UploadDataset.UploadState.FILLING_LINES);
+      plugin.setDoesAuto (true);
+
+      plugin.processAuto (buildScreen ("ISPF Primary Option Menu"));
+
+      assertEquals (1, alerts.size ());
+      assertTrue (alerts.get (0).contains ("DELETE ALL"), alerts.get (0));
+      assertTrue (alerts.get (0).contains ("CANCEL"), alerts.get (0));
+    }
+  }
+
+  // ---------------------------------------------------------------------------------//
+  @Nested class HostConfirmation
+  // ---------------------------------------------------------------------------------//
+  {
+    @Test void ignoresTheColumnsIndicator ()
+    {
+      UploadDataset plugin = createPlugin ();
+
+      assertEquals ("", plugin.findShortMessage (editScreen ("EDIT  X.Y(Z)")));
+    }
+
+    @Test void readsTheIspfShortMessage ()
+    {
+      UploadDataset plugin = createPlugin ();
+      PluginData data = ScreenBuilder
+          .ispfEditScreen ("EDIT  USER1.SRC(TEST)", "Columns 00001 00072")
+          .shortMessage ("Member TEST saved")
+          .build ();
+
+      assertEquals ("Member TEST saved", plugin.findShortMessage (data));
+    }
+
+    @Test void saveErrorAbortsInsteadOfReportingSuccess () throws IOException
+    {
+      UploadDataset plugin = createPlugin ();
+      UploadContext ctx = createContext ("A");
+      ctx.prepare ();
+      ctx.getNextBlock (1);
+      plugin.setContext (ctx);
+      plugin.setState (UploadDataset.UploadState.SAVING);
+      plugin.setDoesAuto (true);
+
+      plugin.processAuto (ScreenBuilder
+          .ispfEditScreen ("EDIT  USER1.SRC(TEST)", "Columns 00001 00072")
+          .shortMessage ("Save error")
+          .build ());
+
+      assertEquals (UploadDataset.UploadState.IDLE, plugin.getState ());
+      assertFalse (plugin.doesAuto ());
+      assertEquals (1, alerts.size ());
+      assertTrue (alerts.get (0).startsWith ("ERROR"), alerts.get (0));
+      assertTrue (alerts.get (0).contains ("recusou o SAVE"), alerts.get (0));
+    }
+
+    @Test void memberSavedCompletesTheUpload () throws IOException
+    {
+      UploadDataset plugin = createPlugin ();
+      UploadContext ctx = createContext ("A", "B");
+      ctx.prepare ();
+      ctx.getNextBlock (2);
+      plugin.setContext (ctx);
+      plugin.setState (UploadDataset.UploadState.SAVING);
+      plugin.setDoesAuto (true);
+
+      plugin.processAuto (ScreenBuilder
+          .ispfEditScreen ("EDIT  USER1.SRC(TEST)", "Columns 00001 00072")
+          .shortMessage ("Member TEST saved")
+          .build ());
+
+      assertEquals (UploadDataset.UploadState.DONE, plugin.getState ());
+      assertEquals (1, alerts.size ());
+      assertTrue (alerts.get (0).startsWith ("INFORMATION"), alerts.get (0));
+      assertTrue (alerts.get (0).contains ("2 linhas"), alerts.get (0));
+    }
+
+    @Test void deleteErrorAborts () throws IOException
+    {
+      UploadDataset plugin = createPlugin ();
+      UploadContext ctx = createContext ("A");
+      ctx.prepare ();
+      plugin.setContext (ctx);
+      plugin.setState (UploadDataset.UploadState.DELETING);
+      plugin.setDoesAuto (true);
+
+      plugin.processAuto (ScreenBuilder
+          .ispfEditScreen ("EDIT  USER1.SRC(TEST)", "Columns 00001 00072")
+          .shortMessage ("Invalid command")
+          .build ());
+
+      assertEquals (UploadDataset.UploadState.IDLE, plugin.getState ());
+      assertTrue (alerts.get (0).contains ("recusou o DELETE ALL"), alerts.get (0));
+    }
+
+    @Test void classifiesMessages ()
+    {
+      assertTrue (UploadDataset.isErrorMessage ("Save error"));
+      assertTrue (UploadDataset.isErrorMessage ("Invalid command"));
+      assertFalse (UploadDataset.isErrorMessage ("Member TEST saved"));
+      assertFalse (UploadDataset.isErrorMessage (""));
+    }
+  }
+
   // ---------------------------------------------------------------
   // Helper methods
   // ---------------------------------------------------------------
@@ -307,11 +739,9 @@ class UploadDatasetTest
   private UploadDataset createPlugin ()
   // ---------------------------------------------------------------------------------//
   {
+    alerts.clear ();
     UploadDataset plugin = new UploadDataset ();
-    plugin.setAlertHandler ((type, msg) ->
-    {
-      // Swallow alerts in tests
-    });
+    plugin.setAlertHandler ((type, msg) -> alerts.add (type + ": " + msg));
     plugin.activate ();
     return plugin;
   }
@@ -324,6 +754,28 @@ class UploadDatasetTest
     Files.write (file, List.of (lines), StandardCharsets.UTF_8);
     return new UploadContext (file.toFile (), 80, StandardCharsets.UTF_8,
         true, false, UploadContext.UploadMode.REPLACE);
+  }
+
+  // ---------------------------------------------------------------------------------//
+  private static String[] numberedLines (int count)
+  // ---------------------------------------------------------------------------------//
+  {
+    String[] lines = new String[count];
+    for (int i = 0; i < count; i++)
+      lines[i] = String.format ("LINHA %03d", i + 1);
+    return lines;
+  }
+
+  /** O que o plugin digitou nos campos de conteudo, na ordem em que digitou. */
+  // ---------------------------------------------------------------------------------//
+  private static List<String> writtenLines (PluginData data)
+  // ---------------------------------------------------------------------------------//
+  {
+    List<String> written = new ArrayList<> ();
+    for (PluginField field : data.changedFields)
+      if (field.location.column > 6 && field.location.column < 15)
+        written.add (field.newData);
+    return written;
   }
 
   // ---------------------------------------------------------------------------------//
@@ -366,9 +818,23 @@ class UploadDatasetTest
         .ispfEditScreen ("EDIT  USER1.SRC(TEST)", "Columns 00001 00072");
 
     for (int i = 0; i < count; i++)
-      sb.dataLine (3 + i, "''''''", "");
+      sb.insertLine (3 + i);
 
     return sb.build ();
+  }
+
+  /** Tela cheia de dados com a unica linha de continuacao no rodape. */
+  // ---------------------------------------------------------------------------------//
+  private static PluginData fullScreenWithContinuationLine ()
+  // ---------------------------------------------------------------------------------//
+  {
+    ScreenBuilder sb = ScreenBuilder
+        .ispfEditScreen ("EDIT  USER1.SRC(TEST)", "Columns 00001 00072");
+
+    for (int row = 3; row <= 21; row++)
+      sb.dataLine (row, String.format ("%06d", (row - 2) * 100), "JA GRAVADA");
+
+    return sb.insertLine (22).build ();
   }
 
   /** Dataset vazio apos DELETE ALL: so tem Top of Data e Bottom of Data. */
@@ -383,5 +849,140 @@ class UploadDatasetTest
         .dataLine (3, "******",
             "**************************** Bottom of Data ****************************")
         .build ();
+  }
+
+  // ---------------------------------------------------------------
+  // Modelo de ISPF EDIT
+  // ---------------------------------------------------------------
+
+  /**
+   * Modelo minimo do ISPF EDIT, so com as regras que decidem o ritmo do upload:
+   *
+   * <ul>
+   *   <li>{@code I<n>} num prefixo cria n linhas de insercao abaixo da ancora,
+   *       limitadas ao que ainda cabe na tela;</li>
+   *   <li>o ENTER sobre linhas de insercao preenchidas converte-as em linhas
+   *       numeradas e emenda UMA linha de continuacao — a regra que fazia o
+   *       upload degenerar em uma linha por ida-e-volta;</li>
+   *   <li>{@code LOCATE n} traz a linha n para o topo do display.</li>
+   * </ul>
+   *
+   * E um modelo, nao o host: serve para medir quantas idas-e-voltas a maquina de
+   * estados gasta, nao para provar como o ISPF real se comporta.
+   */
+  // ---------------------------------------------------------------------------------//
+  private static final class IspfModel
+  // ---------------------------------------------------------------------------------//
+  {
+    private static final int FIRST_ROW = 3;
+    private static final int LAST_ROW = 22;
+    private static final int CAPACITY = LAST_ROW - FIRST_ROW + 1;
+
+    private final List<String> lines = new ArrayList<> ();
+    private final Map<Integer, Integer> rowToIndex = new HashMap<> ();
+
+    private int top;              // indice da primeira linha de dados exibida
+    private int anchor = -1;      // as insercoes pendentes vem depois deste indice
+    private int pending;          // quantas linhas de insercao estao na tela
+    private boolean saved;
+
+    private static String number (int index)
+    {
+      return String.format ("%06d", (index + 1) * 100);
+    }
+
+    PluginData screen ()
+    {
+      rowToIndex.clear ();
+
+      ScreenBuilder sb = ScreenBuilder
+          .ispfEditScreen ("EDIT  USER1.SRC(TEST)", "Columns 00001 00072");
+
+      int row = FIRST_ROW;
+
+      if (top == 0)
+      {
+        sb.dataLine (2, "******", "Top of Data");
+        rowToIndex.put (2, -1);
+      }
+
+      if (anchor < top)
+        row = emitInserts (sb, row);
+
+      for (int i = top; i < lines.size () && row <= LAST_ROW; i++)
+      {
+        rowToIndex.put (row, i);
+        sb.dataLine (row++, number (i), lines.get (i));
+
+        if (i == anchor)
+          row = emitInserts (sb, row);
+      }
+
+      if (row <= LAST_ROW)
+        sb.dataLine (row, "******", "Bottom of Data");
+
+      return sb.build ();
+    }
+
+    private int emitInserts (ScreenBuilder sb, int row)
+    {
+      for (int i = 0; i < pending && row <= LAST_ROW; i++)
+        sb.insertLine (row++);
+      return row;
+    }
+
+    void apply (PluginData data)
+    {
+      String command = "";
+      String prefixCommand = "";
+      int prefixIndex = -1;
+      int prefixRow = -1;
+      List<String> typed = new ArrayList<> ();
+
+      for (PluginField field : data.changedFields)
+      {
+        String value = field.newData == null ? "" : field.newData;
+
+        if (field.location.row == 1 && field.location.column == 20)
+          command = value.trim ();
+        else if (field.location.column == 1)
+        {
+          prefixCommand = value.trim ();
+          prefixRow = field.location.row;
+          prefixIndex = rowToIndex.getOrDefault (prefixRow, -1);
+        }
+        else if (field.location.column == 8)
+          typed.add (value);
+      }
+
+      if (command.equals ("SAVE"))
+        saved = true;
+      else if (command.startsWith ("LOCATE "))
+      {
+        String target = command.substring (7).trim ();
+        for (int i = 0; i < lines.size (); i++)
+          if (number (i).equals (target))
+            top = i;
+        pending = 0;
+      }
+
+      if (prefixCommand.matches ("I\\d+"))
+      {
+        anchor = prefixIndex;
+        int free = LAST_ROW - prefixRow;
+        pending = Math.min (Integer.parseInt (prefixCommand.substring (1)), free);
+      }
+
+      if (!typed.isEmpty ())
+      {
+        int at = anchor + 1;
+        for (String line : typed)
+          lines.add (at++, line);
+
+        anchor = at - 1;
+        pending = 1;                                    // linha de continuacao
+        top = Math.max (0, anchor - CAPACITY + 2);
+      }
+    }
   }
 }

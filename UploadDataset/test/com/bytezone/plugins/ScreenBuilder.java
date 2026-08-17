@@ -101,4 +101,24 @@ final class ScreenBuilder
   {
     return inputField (row, 1, 6, number).inputField (row, 8, 72, text);
   }
+
+  /** Uma linha recem inserida pelo comando I, ainda em branco. */
+  // ---------------------------------------------------------------------------------//
+  ScreenBuilder insertLine (int row)
+  // ---------------------------------------------------------------------------------//
+  {
+    return dataLine (row, "''''''", "");
+  }
+
+  /**
+   * A mensagem curta do ISPF, no canto direito da primeira linha. Fica depois do
+   * indicador de colunas na lista de campos, como na tela real, onde ela ocupa
+   * essa mesma area.
+   */
+  // ---------------------------------------------------------------------------------//
+  ScreenBuilder shortMessage (String text)
+  // ---------------------------------------------------------------------------------//
+  {
+    return protectedField (0, 45, text);
+  }
 }
