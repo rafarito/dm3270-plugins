@@ -59,6 +59,10 @@ public class UploadDataset extends DefaultPlugin
   private int stalledTicks;
   private int lastLinesSent;
 
+  private List<String> currentBlock;
+  private List<Integer> currentBlockRows;
+  private int currentColOffset;
+
   // ---------------------------------------------------------------------------------//
   enum UploadState
   // ---------------------------------------------------------------------------------//
@@ -69,6 +73,8 @@ public class UploadDataset extends DefaultPlugin
     POSITIONING,      // LOCATE enviado para trazer a ancora ao topo da tela
     INSERTING_CMD,    // Comando INSERT enviado, esperando linhas em branco
     FILLING_LINES,    // Preenchendo linhas em branco com conteudo
+    SCROLLING_RIGHT,  // Rolando a tela para a direita para textos longos
+    SCROLLING_LEFT,   // Retornando a tela para a esquerda (LEFT MAX)
     SAVING,           // SAVE enviado, esperando confirmacao
     DONE              // Upload concluido
   }
@@ -91,6 +97,9 @@ public class UploadDataset extends DefaultPlugin
     doesRequest = false;
     state = UploadState.IDLE;
     context = null;
+    currentBlock = null;
+    currentBlockRows = null;
+    currentColOffset = 0;
     resetProgress ();
   }
 
@@ -174,6 +183,9 @@ public class UploadDataset extends DefaultPlugin
     }
 
     resetProgress ();
+    currentBlock = null;
+    currentBlockRows = null;
+    currentColOffset = 0;
 
     if (context.getMode () == UploadContext.UploadMode.REPLACE)
     {
@@ -236,6 +248,14 @@ public class UploadDataset extends DefaultPlugin
 
       case FILLING_LINES:
         handleFillingLines (data);
+        break;
+
+      case SCROLLING_RIGHT:
+        handlePostScrollRight (data);
+        break;
+
+      case SCROLLING_LEFT:
+        handlePostScrollLeft (data);
         break;
 
       case SAVING:
@@ -367,23 +387,42 @@ public class UploadDataset extends DefaultPlugin
   private void handleFillingLines (PluginData data)
   // ---------------------------------------------------------------------------------//
   {
-    if (context.isFinished ())
+    if (context.isFinished () && currentBlock == null)
     {
       // Upload concluido — salvar
-      PluginField commandField = findCommandField (data);
-      if (commandField == null)
+      issueSaveCommand (data);
+      return;
+    }
+
+    if (currentBlock != null)
+    {
+      // Estamos no meio de um bloco rolando a tela horizontalmente.
+      // Recuperar os campos usando as linhas salvas, pois o prefixo '''''' sumiu.
+      List<PluginField> blockFields = new ArrayList<> ();
+      List<PluginField> allContentFields = new ArrayList<> ();
+      for (PluginField field : getModifiableFields (data))
       {
-        abort ("Campo de comando não encontrado para gravar (SAVE).");
-        return;
+        if (field.location.column > 6 && field.location.column < 15)
+          allContentFields.add (field);
+      }
+      for (Integer row : currentBlockRows)
+      {
+        for (PluginField field : allContentFields)
+        {
+          if (field.location.row == row)
+          {
+            blockFields.add (field);
+            break;
+          }
+        }
       }
 
-      write (commandField, "SAVE", data);
-      data.setKey (AIDCommand.AID_ENTER);
-      state = UploadState.SAVING;
+      fillEmptyLines (data, blockFields);
       return;
     }
 
     List<PluginField> emptyFields = findEmptyInsertLines (data);
+
     int remaining = context.getLinesRemaining ();
     int useful = Math.min (remaining, blockSize (data));
 
@@ -396,6 +435,63 @@ public class UploadDataset extends DefaultPlugin
       fillEmptyLines (data, emptyFields);
     else
       repositionAndInsert (data);
+  }
+
+  // ---------------------------------------------------------------------------------//
+  private void issueSaveCommand (PluginData data)
+  // ---------------------------------------------------------------------------------//
+  {
+    PluginField commandField = findCommandField (data);
+    if (commandField == null)
+    {
+      abort ("Campo de comando não encontrado para gravar (SAVE).");
+      return;
+    }
+
+    write (commandField, "SAVE", data);
+    data.setKey (AIDCommand.AID_ENTER);
+    state = UploadState.SAVING;
+  }
+
+  // ---------------------------------------------------------------------------------//
+  private void handlePostScrollRight (PluginData data)
+  // ---------------------------------------------------------------------------------//
+  {
+    String message = findShortMessage (data);
+    if (isErrorMessage (message))
+    {
+      abort ("O ISPF recusou a rolagem para a direita: " + message);
+      return;
+    }
+
+    // Agora preenchemos o resto das colunas do bloco atual
+    handleFillingLines (data);
+  }
+
+  // ---------------------------------------------------------------------------------//
+  private void handlePostScrollLeft (PluginData data)
+  // ---------------------------------------------------------------------------------//
+  {
+    String message = findShortMessage (data);
+    if (isErrorMessage (message))
+    {
+      abort ("O ISPF recusou a rolagem para a esquerda: " + message);
+      return;
+    }
+
+    // O bloco terminou de ser escrito. Limpa o bloco e segue adiante
+    currentBlock = null;
+    currentBlockRows = null;
+    currentColOffset = 0;
+
+    if (context.isFinished ())
+    {
+      issueSaveCommand (data);
+    }
+    else
+    {
+      repositionAndInsert (data);
+    }
   }
 
   // ---------------------------------------------------------------------------------//
@@ -415,6 +511,9 @@ public class UploadDataset extends DefaultPlugin
     doesAuto = false;
     state = UploadState.DONE;
     context = null;
+    currentBlock = null;
+    currentBlockRows = null;
+    currentColOffset = 0;
     resetProgress ();
 
     showAlert (AlertType.INFORMATION, String.format (
@@ -430,21 +529,91 @@ public class UploadDataset extends DefaultPlugin
   private void fillEmptyLines (PluginData data, List<PluginField> emptyFields)
   // ---------------------------------------------------------------------------------//
   {
-    // Pegar bloco de linhas do contexto
-    List<String> block = context.getNextBlock (emptyFields.size ());
-
-    for (int i = 0; i < block.size () && i < emptyFields.size (); i++)
+    if (currentBlock == null)
     {
-      // Sem padding: estas linhas foram recem inseridas pelo ISPF e estao
-      // comprovadamente vazias, entao nao ha residuo para cobrir.
-      emptyFields.get (i).change (block.get (i), data);
+      currentBlock = context.getNextBlock (emptyFields.size ());
+      currentColOffset = 0;
+      currentBlockRows = new ArrayList<> ();
+      for (int i = 0; i < currentBlock.size () && i < emptyFields.size (); i++)
+      {
+        currentBlockRows.add (emptyFields.get (i).location.row);
+      }
     }
 
-    data.setKey (AIDCommand.AID_ENTER);
-    state = UploadState.FILLING_LINES;
+    int fieldLength = emptyFields.isEmpty () ? 72 : emptyFields.get (0).getLength ();
+    boolean needsScroll = false;
 
-    logger.debug ("Preenchidas {} linhas (total enviado: {}/{})",
-        block.size (), context.getLinesSent (), context.getTotalLines ());
+    // Calcular a coluna inicial real da tela do ISPF. O ISPF nao rola alem do LRECL.
+    int lrecl = context.getLrecl ();
+    int maxScrollOffset = Math.max (0, lrecl - fieldLength);
+    int actualOffset = Math.min (currentColOffset, maxScrollOffset);
+
+    for (int i = 0; i < currentBlock.size () && i < emptyFields.size (); i++)
+    {
+      String line = currentBlock.get (i);
+      String chunk = "";
+
+      if (line.length () > currentColOffset)
+      {
+        int end = Math.min (line.length (), actualOffset + fieldLength);
+        chunk = line.substring (actualOffset, end);
+
+        if (line.length () > currentColOffset + fieldLength)
+          needsScroll = true;
+      }
+
+      // Sem padding: estas linhas foram recem inseridas pelo ISPF e estao
+      // comprovadamente vazias, entao nao ha residuo para cobrir.
+      emptyFields.get (i).change (chunk, data);
+    }
+
+    if (needsScroll)
+    {
+      PluginField commandField = findCommandField (data);
+      if (commandField != null)
+      {
+        write (commandField, "RIGHT " + fieldLength, data);
+        currentColOffset += fieldLength;
+        data.setKey (AIDCommand.AID_ENTER);
+        state = UploadState.SCROLLING_RIGHT;
+        stalledTicks = 0; // Evitar abortar por stall durante a rolagem
+      }
+      else
+      {
+        abort ("Campo de comando não encontrado para rolar a tela (RIGHT).");
+      }
+    }
+    else
+    {
+      // Fim do bloco atual
+      if (currentColOffset > 0)
+      {
+        PluginField commandField = findCommandField (data);
+        if (commandField != null)
+        {
+          write (commandField, "LEFT MAX", data);
+          data.setKey (AIDCommand.AID_ENTER);
+          state = UploadState.SCROLLING_LEFT;
+          stalledTicks = 0; // Evitar abortar por stall durante a rolagem
+        }
+        else
+        {
+          abort ("Campo de comando não encontrado para rolar a tela (LEFT).");
+        }
+      }
+      else
+      {
+        currentBlock = null;
+        currentBlockRows = null;
+        currentColOffset = 0;
+        data.setKey (AIDCommand.AID_ENTER);
+        state = UploadState.FILLING_LINES;
+      }
+    }
+
+    logger.debug ("Preenchidas {} linhas (offset {}, total enviado: {}/{})",
+        currentBlock == null ? 0 : currentBlock.size (), currentColOffset,
+        context.getLinesSent (), context.getTotalLines ());
   }
 
   // ---------------------------------------------------------------
@@ -744,6 +913,9 @@ public class UploadDataset extends DefaultPlugin
     doesAuto = false;
     state = UploadState.IDLE;
     context = null;
+    currentBlock = null;
+    currentBlockRows = null;
+    currentColOffset = 0;
     resetProgress ();
 
     showAlert (AlertType.ERROR, message.toString ());
