@@ -629,6 +629,33 @@ class UploadDatasetTest
 
       assertEquals (List.of (veryLongLine), ispf.lines);
     }
+
+    @Test void handlesLinesRequiringMultipleScrolls () throws IOException
+    {
+      String veryLongLine = "A".repeat(255); // 255 chars
+      UploadContext ctx = createContext (255, veryLongLine);
+      ctx.prepare ();
+
+      IspfModel ispf = new IspfModel ();
+      ispf.setLrecl (255);
+      UploadDataset plugin = createPlugin ();
+      plugin.setContext (ctx);
+
+      plugin.setState (UploadDataset.UploadState.DELETING);
+      plugin.setDoesAuto (true);
+
+      int roundTrips = 0;
+
+      while (plugin.doesAuto () && roundTrips < 100)
+      {
+        PluginData data = ispf.screen ();
+        plugin.processAuto (data);
+        ispf.apply (data);
+        ++roundTrips;
+      }
+
+      assertEquals (List.of (veryLongLine), ispf.lines);
+    }
   }
 
   // ---------------------------------------------------------------------------------//
@@ -1031,6 +1058,9 @@ class UploadDatasetTest
           prefixIndex = rowToIndex.getOrDefault (prefixRow, -1);
         }
         else if (field.location.column == 8) {
+          if (value.length() > 72) {
+              throw new IllegalStateException("O terminal não aceita digitar mais de 72 caracteres de uma vez! Tamanho: " + value.length());
+          }
           typedMap.put (field.location.row, value);
         }
       }
