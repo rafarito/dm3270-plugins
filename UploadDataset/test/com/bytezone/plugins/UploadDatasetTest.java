@@ -573,6 +573,65 @@ class UploadDatasetTest
   }
 
   // ---------------------------------------------------------------------------------//
+  @Nested class HorizontalScrolling
+  // ---------------------------------------------------------------------------------//
+  {
+    @Test void handlesLinesLongerThanScreenLimit () throws IOException
+    {
+      String longLine1 = "A".repeat(80) + "B".repeat(10); // 90 chars
+      String longLine2 = "C".repeat(70) + "D".repeat(20); // 90 chars
+      UploadContext ctx = createContext (90, longLine1, longLine2);
+      ctx.prepare ();
+
+      IspfModel ispf = new IspfModel ();
+      ispf.setLrecl (90);
+      UploadDataset plugin = createPlugin ();
+      plugin.setContext (ctx);
+
+      plugin.setState (UploadDataset.UploadState.DELETING);
+      plugin.setDoesAuto (true);
+
+      int roundTrips = 0;
+      while (plugin.doesAuto () && roundTrips < 100)
+      {
+        PluginData data = ispf.screen ();
+        plugin.processAuto (data);
+        ispf.apply (data);
+        ++roundTrips;
+      }
+
+      assertEquals (List.of (longLine1, longLine2), ispf.lines);
+    }
+
+    @Test void horizontalScrollMathFollowsLreclConstraints () throws IOException
+    {
+      String veryLongLine = "1234567890".repeat(13) + "123"; // 133 chars
+      UploadContext ctx = createContext (133, veryLongLine);
+      ctx.prepare ();
+
+      IspfModel ispf = new IspfModel ();
+      ispf.setLrecl (133);
+      UploadDataset plugin = createPlugin ();
+      plugin.setContext (ctx);
+
+      plugin.setState (UploadDataset.UploadState.DELETING);
+      plugin.setDoesAuto (true);
+
+      int roundTrips = 0;
+
+      while (plugin.doesAuto () && roundTrips < 100)
+      {
+        PluginData data = ispf.screen ();
+        plugin.processAuto (data);
+        ispf.apply (data);
+        ++roundTrips;
+      }
+
+      assertEquals (List.of (veryLongLine), ispf.lines);
+    }
+  }
+
+  // ---------------------------------------------------------------------------------//
   @Nested class ProgressGuard
   // ---------------------------------------------------------------------------------//
   {
@@ -750,9 +809,16 @@ class UploadDatasetTest
   private UploadContext createContext (String... lines) throws IOException
   // ---------------------------------------------------------------------------------//
   {
+    return createContext (80, lines);
+  }
+
+  // ---------------------------------------------------------------------------------//
+  private UploadContext createContext (int lrecl, String... lines) throws IOException
+  // ---------------------------------------------------------------------------------//
+  {
     Path file = tempDir.resolve ("upload_test.txt");
     Files.write (file, List.of (lines), StandardCharsets.UTF_8);
-    return new UploadContext (file.toFile (), 80, StandardCharsets.UTF_8,
+    return new UploadContext (file.toFile (), lrecl, StandardCharsets.UTF_8,
         true, false, UploadContext.UploadMode.REPLACE);
   }
 
@@ -885,6 +951,10 @@ class UploadDatasetTest
     private int anchor = -1;      // as insercoes pendentes vem depois deste indice
     private int pending;          // quantas linhas de insercao estao na tela
     private boolean saved;
+    private int horizontalOffset; // offset de rolagem horizontal
+    private int lrecl = 80;       // tamanho logico do registro
+
+    public void setLrecl(int lrecl) { this.lrecl = lrecl; }
 
     private static String number (int index)
     {
@@ -912,7 +982,16 @@ class UploadDatasetTest
       for (int i = top; i < lines.size () && row <= LAST_ROW; i++)
       {
         rowToIndex.put (row, i);
-        sb.dataLine (row++, number (i), lines.get (i));
+        String visibleText = lines.get (i);
+        if (visibleText.length () > horizontalOffset) {
+            visibleText = visibleText.substring (horizontalOffset);
+        } else {
+            visibleText = "";
+        }
+        if (visibleText.length () > 72) {
+            visibleText = visibleText.substring (0, 72);
+        }
+        sb.dataLine (row++, number (i), visibleText);
 
         if (i == anchor)
           row = emitInserts (sb, row);
@@ -937,7 +1016,7 @@ class UploadDatasetTest
       String prefixCommand = "";
       int prefixIndex = -1;
       int prefixRow = -1;
-      List<String> typed = new ArrayList<> ();
+      Map<Integer, String> typedMap = new HashMap<> ();
 
       for (PluginField field : data.changedFields)
       {
@@ -951,8 +1030,46 @@ class UploadDatasetTest
           prefixRow = field.location.row;
           prefixIndex = rowToIndex.getOrDefault (prefixRow, -1);
         }
-        else if (field.location.column == 8)
-          typed.add (value);
+        else if (field.location.column == 8) {
+          typedMap.put (field.location.row, value);
+        }
+      }
+
+      if (!typedMap.isEmpty ())
+      {
+        if (horizontalOffset == 0 && pending > 0)
+        {
+          List<Integer> rows = new ArrayList<> (typedMap.keySet ());
+          rows.sort (null);
+          int at = anchor + 1;
+          for (Integer r : rows) {
+            lines.add (at++, typedMap.get (r));
+          }
+
+          anchor = at - 1;
+          pending = 1;                                    // linha de continuacao
+          top = Math.max (0, anchor - CAPACITY + 2);
+        }
+        else
+        {
+          // Updating existing lines (scrolled)
+          for (Map.Entry<Integer, String> entry : typedMap.entrySet ())
+          {
+            int r = entry.getKey ();
+            int idx = rowToIndex.getOrDefault (r, -1);
+            if (idx >= 0 && idx < lines.size ())
+            {
+              String existing = lines.get (idx);
+              String append = entry.getValue ();
+              if (existing.length () < horizontalOffset)
+                  existing = existing + " ".repeat (horizontalOffset - existing.length ());
+              String updated = existing.substring (0, horizontalOffset) + append;
+              if (existing.length () > horizontalOffset + append.length ())
+                  updated += existing.substring (horizontalOffset + append.length ());
+              lines.set (idx, updated);
+            }
+          }
+        }
       }
 
       if (command.equals ("SAVE"))
@@ -965,23 +1082,21 @@ class UploadDatasetTest
             top = i;
         pending = 0;
       }
+      else if (command.startsWith ("RIGHT "))
+      {
+        int shift = Integer.parseInt (command.substring (6).trim ());
+        horizontalOffset = Math.min(horizontalOffset + shift, Math.max(0, lrecl - 72));
+      }
+      else if (command.equals ("LEFT MAX"))
+      {
+        horizontalOffset = 0;
+      }
 
       if (prefixCommand.matches ("I\\d+"))
       {
         anchor = prefixIndex;
         int free = LAST_ROW - prefixRow;
         pending = Math.min (Integer.parseInt (prefixCommand.substring (1)), free);
-      }
-
-      if (!typed.isEmpty ())
-      {
-        int at = anchor + 1;
-        for (String line : typed)
-          lines.add (at++, line);
-
-        anchor = at - 1;
-        pending = 1;                                    // linha de continuacao
-        top = Math.max (0, anchor - CAPACITY + 2);
       }
     }
   }
