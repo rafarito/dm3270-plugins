@@ -29,11 +29,20 @@ class DownloadDatasetTest
   private static final String TITLE = "EDIT       MYUSER.TEST.CNTL(JOB1)";
 
   private DownloadDataset plugin;
+  private final List<String> alerts = new ArrayList<> ();
+
+  private DownloadDataset createPlugin ()
+  {
+    DownloadDataset p = new DownloadDataset ();
+    p.setAlertHandler ((type, msg) -> alerts.add (type + ": " + msg));
+    return p;
+  }
 
   @BeforeEach
   void setUp ()
   {
-    plugin = new DownloadDataset ();
+    alerts.clear ();
+    plugin = createPlugin ();
     plugin.activate ();
   }
 
@@ -91,7 +100,7 @@ class DownloadDatasetTest
     @DisplayName ("um plugin recem-criado nao responde a nada")
     void startsInert ()
     {
-      DownloadDataset fresh = new DownloadDataset ();
+      DownloadDataset fresh = createPlugin ();
 
       assertFalse (fresh.doesRequest ());
       assertFalse (fresh.doesAuto ());
@@ -266,7 +275,7 @@ class DownloadDatasetTest
     void stopsWhenPageRepeats ()
     {
       // sem documento aberto, o fim da varredura nao precisa salvar nada
-      DownloadDataset fresh = new DownloadDataset ();
+      DownloadDataset fresh = createPlugin ();
       fresh.activate ();
 
       PluginData first = page ("Columns 00073 00144", 400).build ();
@@ -285,7 +294,7 @@ class DownloadDatasetTest
     @DisplayName ("sem documento aberto e fora da linha 1, a varredura desiste")
     void givesUpWhenNotAtFirstLine ()
     {
-      DownloadDataset fresh = new DownloadDataset ();
+      DownloadDataset fresh = createPlugin ();
       fresh.activate ();
 
       PluginData first = page ("Columns 00001 00072", 500).build ();
@@ -302,7 +311,7 @@ class DownloadDatasetTest
     @DisplayName ("sem documento aberto e fora da coluna 1, insiste no PF10")
     void retriesLeftWhenNotAtFirstColumn ()
     {
-      DownloadDataset fresh = new DownloadDataset ();
+      DownloadDataset fresh = createPlugin ();
       fresh.activate ();
 
       PluginData first = page ("Columns 00073 00144", 1).build ();
@@ -320,7 +329,7 @@ class DownloadDatasetTest
     @DisplayName ("chegando ao topo e a esquerda, o documento e aberto e a descida comeca")
     void opensDocumentWhenBackAtTheOrigin ()
     {
-      DownloadDataset fresh = new DownloadDataset ();
+      DownloadDataset fresh = createPlugin ();
       fresh.activate ();
 
       PluginData first = page ("Columns 00001 00072", 500).build ();
@@ -388,7 +397,7 @@ class DownloadDatasetTest
 
     @Test
     @DisplayName ("o arquivo gravado traz uma linha por registro")
-    void writesOneLinePerRecord (@TempDir File directory)
+    void writesOneLinePerRecord (@TempDir File directory) throws IOException
     {
       List<Document> saved = new ArrayList<> ();
       plugin.setDocumentSaver (saved::add);
@@ -407,7 +416,7 @@ class DownloadDatasetTest
     @DisplayName ("uma pagina vazia sem documento aberto encerra sem salvar")
     void emptyPageWithoutDocument ()
     {
-      DownloadDataset fresh = new DownloadDataset ();
+      DownloadDataset fresh = createPlugin ();
       fresh.activate ();
 
       PluginData first = page ("Columns 00001 00072", 500).build ();
@@ -422,7 +431,7 @@ class DownloadDatasetTest
     @DisplayName ("nao existe mais limite de iteracoes, permitindo grandes downloads")
     void canProcessMoreThanTwentyLoops ()
     {
-      DownloadDataset fresh = new DownloadDataset ();
+      DownloadDataset fresh = createPlugin ();
       fresh.activate ();
 
       PluginData first = page ("Columns 00073 00144", 1).build ();

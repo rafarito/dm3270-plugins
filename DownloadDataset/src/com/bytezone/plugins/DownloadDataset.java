@@ -6,6 +6,10 @@ import java.io.IOException;
 import java.util.Map;
 import java.util.function.Consumer;
 import java.util.TreeMap;
+import java.util.function.BiConsumer;
+
+import javafx.scene.control.Alert;
+import javafx.scene.control.Alert.AlertType;
 
 import com.bytezone.dm3270.commands.AIDCommand;
 import com.bytezone.dm3270.plugins.DefaultPlugin;
@@ -32,6 +36,33 @@ public class DownloadDataset extends DefaultPlugin
   private boolean pendingBottomRight;
   private boolean[][] visitedPages;
   private int unvisitedPages = -1;
+
+  private BiConsumer<AlertType, String> alertHandler = (type, msg) ->
+      Platform.runLater (() ->
+      {
+        Alert alert = new Alert (type, msg);
+        alert.getDialogPane ().setHeaderText (null);
+        alert.showAndWait ();
+      });
+
+  void setAlertHandler (BiConsumer<AlertType, String> handler)
+  {
+    this.alertHandler = handler;
+  }
+
+  private void showAlert (AlertType type, String message)
+  {
+    if (alertHandler != null)
+      alertHandler.accept (type, message);
+  }
+
+  private void abort (String reason)
+  {
+    logger.warn ("Download abortado: {}", reason);
+    doesAuto = false;
+    doesRequest = false;
+    showAlert (AlertType.ERROR, reason);
+  }
 
   @Override
   public void activate ()
@@ -69,7 +100,7 @@ public class DownloadDataset extends DefaultPlugin
     DocumentPage page = DocumentPage.createPage (data, getModifiableFields (data));
     if (page == null)
     {
-      logger.warn ("Not a document page");
+      abort ("A tela atual não parece conter um documento ou dataset suportado.");
       return;
     }
 
@@ -113,8 +144,7 @@ public class DownloadDataset extends DefaultPlugin
     DocumentPage page = DocumentPage.createPage (data, getModifiableFields (data));
     if (page == null)
     {
-      logger.warn ("Not a document page");
-      doesAuto = false;
+      abort ("A tela mudou inesperadamente e não é mais reconhecida como um documento.");
       return;
     }
 
@@ -147,8 +177,7 @@ public class DownloadDataset extends DefaultPlugin
     {
       if (page.firstLine != 1)
       {
-        logger.warn ("Not at document first document line");
-        doesAuto = false;
+        abort ("O documento não está posicionado no início (linha 1). Role para o topo e tente novamente.");
         return;
       }
 
@@ -242,7 +271,10 @@ public class DownloadDataset extends DefaultPlugin
   private void saveDocument ()
   {
     if (currentDocument == null)
+    {
+      abort ("Ocorreu um erro: o documento interno está vazio após o download.");
       return;
+    }
 
     Document document = currentDocument;
     logger.info ("Preparando para salvar o documento: {}", document.datasetName);
@@ -260,7 +292,7 @@ public class DownloadDataset extends DefaultPlugin
 
   // Grava uma linha por registro. Visivel ao teste para que o formato do arquivo seja
   // verificavel sem abrir dialogo nenhum.
-  static void writeTo (Document document, File file)
+  static void writeTo (Document document, File file) throws IOException
   {
     try (PrintWriter writer = new PrintWriter (file))
     {
@@ -269,13 +301,8 @@ public class DownloadDataset extends DefaultPlugin
 
       logger.info ("Documento salvo em: {}", file.getAbsolutePath ());
     }
-    catch (IOException ex)
-    {
-      logger.error ("Erro ao salvar documento: {}", ex.getMessage (), ex);
-    }
   }
 
-  // Substituivel em teste; em producao abre o seletor de arquivos na thread do JavaFX.
   private Consumer<Document> documentSaver = document -> Platform.runLater ( () ->
   {
     FileChooser fileChooser = new FileChooser ();
@@ -284,7 +311,18 @@ public class DownloadDataset extends DefaultPlugin
 
     File file = fileChooser.showSaveDialog (null);
     if (file != null)
-      writeTo (document, file);
+    {
+      try
+      {
+        writeTo (document, file);
+        showAlert (AlertType.INFORMATION, "Dataset salvo com sucesso em:\n" + file.getAbsolutePath ());
+      }
+      catch (IOException ex)
+      {
+        logger.error ("Erro ao salvar documento: {}", ex.getMessage (), ex);
+        showAlert (AlertType.ERROR, "Erro ao gravar o arquivo localmente:\n" + ex.getMessage ());
+      }
+    }
   });
 
   void setDocumentSaver (Consumer<Document> documentSaver)
