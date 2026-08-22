@@ -59,6 +59,13 @@ class DownloadDatasetTest
         .dataLine (5, String.format ("%06d", firstLine + 200), "//SYSPRINT DD");
     }
 
+  // A mesma pagina com o marcador de inicio de dados.
+  private static ScreenBuilder pageWithTop (String columns, int firstLine)
+  {
+    return page (columns, firstLine).protectedField (6, 8,
+        "***************************** Top of Data ******************************");
+  }
+
   // A mesma pagina com o marcador de fim de dados.
   private static ScreenBuilder pageWithEnd (String columns, int firstLine)
   {
@@ -71,8 +78,7 @@ class DownloadDatasetTest
     return ispfEditScreen (TITLE, columns);
   }
 
-  // setMax () escreve no campo seguinte ao rotulo "Scroll ===>". change () guarda o
-  // texto em newData e registra o campo em changedFields; fieldValue nao muda.
+  // setMax () escreve no campo seguinte ao rotulo "Scroll ===>".
   private static String maxValue (PluginData data)
   {
     return data.changedFields.isEmpty () ? null : data.changedFields.get (0).newData;
@@ -88,6 +94,16 @@ class DownloadDatasetTest
     {
       throw new AssertionError ("nao deu para ler o arquivo gravado", e);
     }
+  }
+
+  /**
+   * Helper: executa processRequest na origem (linha 1, col 1) e consome a sondagem
+   * de LRECL padrao (PF11 MAX que nao rola porque LRECL <= 72).
+   */
+  private void requestAndProbe ()
+  {
+    plugin.processRequest (page ("Columns 00001 00072", 1).build ());
+    plugin.processAuto (page ("Columns 00001 00072", 1).build ());
   }
 
   // ---------------------------------------------------------------------------------//
@@ -174,20 +190,21 @@ class DownloadDatasetTest
     }
 
     @Test
-    @DisplayName ("no canto superior esquerdo comeca a descer (PF8)")
-    void startsScrollingDown ()
+    @DisplayName ("no canto superior esquerdo sonda o LRECL com PF11 MAX")
+    void probesLreclOnFirstScreen ()
     {
       PluginData data = page ("Columns 00001 00072", 1).build ();
 
       plugin.processRequest (data);
 
-      assertEquals (AIDCommand.AID_PF8, data.key);
+      assertEquals (AIDCommand.AID_PF11, data.key);
+      assertEquals ("m", maxValue (data));
       assertTrue (plugin.doesAuto ());
     }
 
     @Test
-    @DisplayName ("uma pagina unica com fim de dados vai ao canto inferior direito (PF11)")
-    void jumpsToBottomRightWhenDocumentFits ()
+    @DisplayName ("uma pagina unica com fim de dados tambem sonda LRECL com PF11 MAX")
+    void probesLreclEvenWithEnd ()
     {
       PluginData data = pageWithEnd ("Columns 00001 00072", 1).build ();
 
@@ -214,6 +231,93 @@ class DownloadDatasetTest
 
   // ---------------------------------------------------------------------------------//
   @Nested
+  @DisplayName ("sondagem de LRECL")
+  class LreclProbe
+  // ---------------------------------------------------------------------------------//
+  {
+    @Test
+    @DisplayName ("LRECL padrao (<=72): apos sondagem comeca a descer")
+    void standardLreclStartsDescending ()
+    {
+      plugin.processRequest (page ("Columns 00001 00072", 1).build ());
+
+      // Sondagem: PF11 MAX nao rolou (LRECL <= 72)
+      PluginData probe = page ("Columns 00001 00072", 1).build ();
+      plugin.processAuto (probe);
+
+      assertEquals (AIDCommand.AID_PF8, probe.key);
+      assertTrue (plugin.doesAuto ());
+    }
+
+    @Test
+    @DisplayName ("LRECL padrao com hasEnd: salva imediatamente")
+    void standardLreclWithEndSaves ()
+    {
+      List<Document> saved = new ArrayList<> ();
+      plugin.setDocumentSaver (saved::add);
+
+      plugin.processRequest (pageWithEnd ("Columns 00001 00072", 1).build ());
+
+      // Sondagem: PF11 MAX nao rolou, hasEnd visivel
+      plugin.processAuto (pageWithEnd ("Columns 00001 00072", 1).build ());
+
+      assertFalse (plugin.doesAuto ());
+      assertEquals (1, saved.size ());
+    }
+
+    @Test
+    @DisplayName ("LRECL largo (>72): volta para a coluna 1 com PF10 MAX")
+    void wideLreclReturnsToColumnOne ()
+    {
+      plugin.processRequest (page ("Columns 00001 00072", 1).build ());
+
+      // Sondagem: PF11 MAX rolou ate col 129-200
+      PluginData probe = page ("Columns 00129 00200", 1).build ();
+      plugin.processAuto (probe);
+
+      assertEquals (AIDCommand.AID_PF10, probe.key);
+      assertEquals ("m", maxValue (probe));
+      assertTrue (plugin.doesAuto ());
+    }
+
+    @Test
+    @DisplayName ("apos retornar da sondagem larga, comeca a descer")
+    void afterWideProbeStartsDescending ()
+    {
+      plugin.processRequest (page ("Columns 00001 00072", 1).build ());
+      plugin.processAuto (page ("Columns 00129 00200", 1).build ());    // sondagem
+
+      // De volta na coluna 1
+      PluginData back = page ("Columns 00001 00072", 1).build ();
+      plugin.processAuto (back);
+
+      assertEquals (AIDCommand.AID_PF8, back.key);
+      assertTrue (plugin.doesAuto ());
+    }
+
+    @Test
+    @DisplayName ("sondagem detectada apos navegacao inicial ao topo")
+    void probeAfterScrollToTop ()
+    {
+      DownloadDataset fresh = createPlugin ();
+      fresh.activate ();
+
+      // Comeca no meio do documento
+      PluginData first = page ("Columns 00001 00072", 500).build ();
+      fresh.processRequest (first);        // PF7 para o topo
+
+      // Chega ao topo: abre documento e sonda LRECL
+      PluginData atTop = page ("Columns 00001 00072", 1).build ();
+      fresh.processAuto (atTop);
+
+      assertEquals (AIDCommand.AID_PF11, atTop.key);
+      assertEquals ("m", maxValue (atTop));
+      assertTrue (fresh.doesAuto ());
+    }
+  }
+
+  // ---------------------------------------------------------------------------------//
+  @Nested
   @DisplayName ("processAuto - varredura das paginas")
   class AutoScroll
   // ---------------------------------------------------------------------------------//
@@ -234,7 +338,7 @@ class DownloadDatasetTest
     @DisplayName ("continua descendo enquanto houver linhas novas")
     void keepsScrollingDown ()
     {
-      plugin.processRequest (page ("Columns 00001 00072", 1).build ());
+      requestAndProbe ();
 
       PluginData second = page ("Columns 00001 00072", 400).build ();
       plugin.processAuto (second);
@@ -244,30 +348,19 @@ class DownloadDatasetTest
     }
 
     @Test
-    @DisplayName ("ao encontrar o fim dos dados vai para o canto inferior direito")
-    void goesRightWhenEndReached ()
+    @DisplayName ("com LRECL padrao, ao encontrar o fim dos dados encerra e salva")
+    void savesWhenEndReachedWithStandardLrecl ()
     {
-      plugin.processRequest (page ("Columns 00001 00072", 1).build ());
+      List<Document> saved = new ArrayList<> ();
+      plugin.setDocumentSaver (saved::add);
+
+      requestAndProbe ();
 
       PluginData second = pageWithEnd ("Columns 00001 00072", 400).build ();
       plugin.processAuto (second);
 
-      assertEquals (AIDCommand.AID_PF11, second.key);
-      assertEquals ("m", maxValue (second));
-      assertTrue (plugin.doesAuto ());
-    }
-
-    @Test
-    @DisplayName ("numa faixa deslocada sem inicio de dados, sobe (PF7)")
-    void scrollsUpOnShiftedPage ()
-    {
-      plugin.processRequest (page ("Columns 00001 00072", 1).build ());
-
-      PluginData shifted = page ("Columns 00073 00144", 400).build ();
-      plugin.processAuto (shifted);
-
-      assertEquals (AIDCommand.AID_PF7, shifted.key);
-      assertTrue (plugin.doesAuto ());
+      assertFalse (plugin.doesAuto ());
+      assertEquals (1, saved.size ());
     }
 
     @Test
@@ -326,7 +419,7 @@ class DownloadDatasetTest
     }
 
     @Test
-    @DisplayName ("chegando ao topo e a esquerda, o documento e aberto e a descida comeca")
+    @DisplayName ("chegando ao topo e a esquerda, o documento e aberto e a sondagem comeca")
     void opensDocumentWhenBackAtTheOrigin ()
     {
       DownloadDataset fresh = createPlugin ();
@@ -338,78 +431,9 @@ class DownloadDatasetTest
       PluginData second = page ("Columns 00001 00072", 1).build ();
       fresh.processAuto (second);
 
-      assertEquals (AIDCommand.AID_PF8, second.key);
+      assertEquals (AIDCommand.AID_PF11, second.key);
+      assertEquals ("m", maxValue (second));
       assertTrue (fresh.doesAuto ());
-    }
-  }
-
-  // ---------------------------------------------------------------------------------//
-  @Nested
-  @DisplayName ("fim da captura")
-  class Completion
-  // ---------------------------------------------------------------------------------//
-  {
-    @Test
-    @DisplayName ("uma pagina vazia encerra a captura e entrega o documento montado")
-    void emptyPageFinishesTheCapture ()
-    {
-      // a escolha do arquivo e uma etapa separada da captura: o teste a substitui e
-      // verifica o documento que seria gravado
-      List<Document> saved = new ArrayList<> ();
-      plugin.setDocumentSaver (saved::add);
-
-      plugin.processRequest (page ("Columns 00001 00072", 1).build ());
-      plugin.processAuto (emptyPage ("Columns 00001 00072").build ());
-
-      assertFalse (plugin.doesAuto ());
-      assertEquals (1, saved.size ());
-      assertEquals ("MYUSER.TEST.CNTL", saved.get (0).datasetName);
-      assertEquals ("JOB1", saved.get (0).memberName);
-    }
-
-    @Test
-    @DisplayName ("uma pagina repetida tambem encerra e entrega o documento")
-    void repeatedPageFinishesTheCapture ()
-    {
-      List<Document> saved = new ArrayList<> ();
-      plugin.setDocumentSaver (saved::add);
-
-      plugin.processRequest (page ("Columns 00001 00072", 1).build ());
-      plugin.processAuto (page ("Columns 00001 00072", 400).build ());
-      plugin.processAuto (page ("Columns 00001 00072", 400).build ());
-
-      assertFalse (plugin.doesAuto ());
-      assertEquals (1, saved.size ());
-    }
-
-    @Test
-    @DisplayName ("o nome sugerido para o arquivo usa o membro quando existe")
-    void suggestsTheMemberName ()
-    {
-      List<Document> saved = new ArrayList<> ();
-      plugin.setDocumentSaver (saved::add);
-
-      plugin.processRequest (page ("Columns 00001 00072", 1).build ());
-      plugin.processAuto (emptyPage ("Columns 00001 00072").build ());
-
-      assertEquals ("JOB1.txt", DownloadDataset.suggestedFileName (saved.get (0)));
-    }
-
-    @Test
-    @DisplayName ("o arquivo gravado traz uma linha por registro")
-    void writesOneLinePerRecord (@TempDir File directory) throws IOException
-    {
-      List<Document> saved = new ArrayList<> ();
-      plugin.setDocumentSaver (saved::add);
-
-      plugin.processRequest (page ("Columns 00001 00072", 1).build ());
-      plugin.processAuto (emptyPage ("Columns 00001 00072").build ());
-
-      File file = new File (directory, "JOB1.txt");
-      DownloadDataset.writeTo (saved.get (0), file);
-
-      assertTrue (file.exists ());
-      assertEquals (3, linesOf (file), "as tres linhas capturadas");
     }
 
     @Test
@@ -447,6 +471,193 @@ class DownloadDatasetTest
 
   // ---------------------------------------------------------------------------------//
   @Nested
+  @DisplayName ("serpentina horizontal com LRECL largo")
+  class SerpentineScan
+  // ---------------------------------------------------------------------------------//
+  {
+    @Test
+    @DisplayName ("ao encontrar Bottom of Data com LRECL largo, avanca para a direita")
+    void advancesRightOnEndWithWideLrecl ()
+    {
+      plugin.processRequest (page ("Columns 00001 00072", 1).build ());
+      plugin.processAuto (page ("Columns 00129 00200", 1).build ());    // sondagem: LRECL=200
+      plugin.processAuto (page ("Columns 00001 00072", 1).build ());    // retorno
+
+      // Desce ate o fim dos dados
+      PluginData bottom = pageWithEnd ("Columns 00001 00072", 400).build ();
+      plugin.processAuto (bottom);
+
+      assertEquals (AIDCommand.AID_PF11, bottom.key, "deve avancar para a direita");
+      assertTrue (plugin.doesAuto ());
+    }
+
+    @Test
+    @DisplayName ("na faixa deslocada sem Top of Data, sobe com PF7")
+    void ascendsInShiftedStripe ()
+    {
+      plugin.processRequest (page ("Columns 00001 00072", 1).build ());
+      plugin.processAuto (page ("Columns 00129 00200", 1).build ());    // sondagem
+      plugin.processAuto (page ("Columns 00001 00072", 1).build ());    // retorno
+      plugin.processAuto (pageWithEnd ("Columns 00001 00072", 400).build ()); // bottom, PF11
+
+      // Agora estamos na faixa 73-144, sem Top of Data visivel
+      PluginData shifted = page ("Columns 00073 00144", 300).build ();
+      plugin.processAuto (shifted);
+
+      assertEquals (AIDCommand.AID_PF7, shifted.key, "deve subir nesta faixa");
+      assertTrue (plugin.doesAuto ());
+    }
+
+    @Test
+    @DisplayName ("ao atingir Top of Data na faixa deslocada, avanca novamente")
+    void advancesRightOnTopInShiftedStripe ()
+    {
+      plugin.processRequest (page ("Columns 00001 00072", 1).build ());
+      plugin.processAuto (page ("Columns 00129 00200", 1).build ());    // sondagem
+      plugin.processAuto (page ("Columns 00001 00072", 1).build ());    // retorno
+      plugin.processAuto (pageWithEnd ("Columns 00001 00072", 400).build ()); // PF11
+
+      // Sobe ate o topo da faixa 73-144
+      PluginData top = pageWithTop ("Columns 00073 00144", 1).build ();
+      plugin.processAuto (top);
+
+      // rightColumn (144) < detectedLrecl (200) -> avanca
+      assertEquals (AIDCommand.AID_PF11, top.key, "deve avancar para a proxima faixa");
+      assertTrue (plugin.doesAuto ());
+    }
+
+    @Test
+    @DisplayName ("na ultima faixa com Bottom of Data, salva o documento")
+    void savesOnLastStripeBottom ()
+    {
+      List<Document> saved = new ArrayList<> ();
+      plugin.setDocumentSaver (saved::add);
+
+      plugin.processRequest (page ("Columns 00001 00072", 1).build ());
+      plugin.processAuto (page ("Columns 00129 00200", 1).build ());    // sondagem: LRECL=200
+      plugin.processAuto (page ("Columns 00001 00072", 1).build ());    // retorno
+      plugin.processAuto (pageWithEnd ("Columns 00001 00072", 400).build ()); // PF11
+      plugin.processAuto (pageWithTop ("Columns 00073 00144", 1).build ());  // PF11
+
+      // Descendo na faixa 145-200, encontra Bottom of Data
+      // rightColumn (200) < detectedLrecl (200) -> false -> salva
+      PluginData lastBottom = pageWithEnd ("Columns 00145 00200", 400).build ();
+      plugin.processAuto (lastBottom);
+
+      assertFalse (plugin.doesAuto ());
+      assertEquals (1, saved.size ());
+    }
+
+    @Test
+    @DisplayName ("na ultima faixa com Top of Data, salva o documento")
+    void savesOnLastStripeTop ()
+    {
+      List<Document> saved = new ArrayList<> ();
+      plugin.setDocumentSaver (saved::add);
+
+      // Simula LRECL=144 (2 faixas: 1-72 e 73-144)
+      plugin.processRequest (page ("Columns 00001 00072", 1).build ());
+      plugin.processAuto (page ("Columns 00073 00144", 1).build ());    // sondagem: LRECL=144
+      plugin.processAuto (page ("Columns 00001 00072", 1).build ());    // retorno
+      plugin.processAuto (pageWithEnd ("Columns 00001 00072", 400).build ()); // PF11
+
+      // Na faixa 73-144 subindo, atinge Top of Data
+      // rightColumn (144) < detectedLrecl (144) -> false -> salva
+      PluginData lastTop = pageWithTop ("Columns 00073 00144", 1).build ();
+      plugin.processAuto (lastTop);
+
+      assertFalse (plugin.doesAuto ());
+      assertEquals (1, saved.size ());
+    }
+
+    @Test
+    @DisplayName ("pagina repetida com colunas pendentes avanca ao inves de salvar")
+    void repeatedPageAdvancesWhenColumnsRemain ()
+    {
+      plugin.processRequest (page ("Columns 00001 00072", 1).build ());
+      plugin.processAuto (page ("Columns 00129 00200", 1).build ());    // sondagem: LRECL=200
+      plugin.processAuto (page ("Columns 00001 00072", 1).build ());    // retorno
+
+      // Duas vezes a mesma pagina: como ha colunas pendentes, avanca
+      plugin.processAuto (page ("Columns 00001 00072", 400).build ());
+      PluginData repeat = page ("Columns 00001 00072", 400).build ();
+      plugin.processAuto (repeat);
+
+      assertEquals (AIDCommand.AID_PF11, repeat.key, "deve avancar, nao salvar");
+      assertTrue (plugin.doesAuto ());
+    }
+  }
+
+  // ---------------------------------------------------------------------------------//
+  @Nested
+  @DisplayName ("fim da captura")
+  class Completion
+  // ---------------------------------------------------------------------------------//
+  {
+    @Test
+    @DisplayName ("uma pagina vazia encerra a captura e entrega o documento montado")
+    void emptyPageFinishesTheCapture ()
+    {
+      List<Document> saved = new ArrayList<> ();
+      plugin.setDocumentSaver (saved::add);
+
+      requestAndProbe ();
+      plugin.processAuto (emptyPage ("Columns 00001 00072").build ());
+
+      assertFalse (plugin.doesAuto ());
+      assertEquals (1, saved.size ());
+      assertEquals ("MYUSER.TEST.CNTL", saved.get (0).datasetName);
+      assertEquals ("JOB1", saved.get (0).memberName);
+    }
+
+    @Test
+    @DisplayName ("uma pagina repetida tambem encerra e entrega o documento")
+    void repeatedPageFinishesTheCapture ()
+    {
+      List<Document> saved = new ArrayList<> ();
+      plugin.setDocumentSaver (saved::add);
+
+      requestAndProbe ();
+      plugin.processAuto (page ("Columns 00001 00072", 400).build ());
+      plugin.processAuto (page ("Columns 00001 00072", 400).build ());
+
+      assertFalse (plugin.doesAuto ());
+      assertEquals (1, saved.size ());
+    }
+
+    @Test
+    @DisplayName ("o nome sugerido para o arquivo usa o membro quando existe")
+    void suggestsTheMemberName ()
+    {
+      List<Document> saved = new ArrayList<> ();
+      plugin.setDocumentSaver (saved::add);
+
+      requestAndProbe ();
+      plugin.processAuto (emptyPage ("Columns 00001 00072").build ());
+
+      assertEquals ("JOB1.txt", DownloadDataset.suggestedFileName (saved.get (0)));
+    }
+
+    @Test
+    @DisplayName ("o arquivo gravado traz uma linha por registro")
+    void writesOneLinePerRecord (@TempDir File directory) throws IOException
+    {
+      List<Document> saved = new ArrayList<> ();
+      plugin.setDocumentSaver (saved::add);
+
+      requestAndProbe ();
+      plugin.processAuto (emptyPage ("Columns 00001 00072").build ());
+
+      File file = new File (directory, "JOB1.txt");
+      DownloadDataset.writeTo (saved.get (0), file);
+
+      assertTrue (file.exists ());
+      assertEquals (3, linesOf (file), "as tres linhas capturadas");
+    }
+  }
+
+  // ---------------------------------------------------------------------------------//
+  @Nested
   @DisplayName ("campo de scroll")
   class ScrollField
   // ---------------------------------------------------------------------------------//
@@ -455,24 +666,19 @@ class DownloadDatasetTest
     @DisplayName ("o 'm' de scroll maximo vai para o campo de scroll")
     void maxGoesToTheScrollField ()
     {
-      // setMax () localiza o rotulo "Scroll ===>" e altera o campo seguinte: e ele que
-      // o ISPF le para rolar ao extremo com PF7/PF8. Escrever na linha de comando nao
-      // rolava nada e deixava lixo para o ISPF interpretar como comando.
       PluginData data = page ("Columns 00001 00072", 500).build ();
 
       plugin.processRequest (data);
 
       assertEquals (1, data.changedFields.size ());
       assertEquals ("m", data.changedFields.get (0).newData);
-      assertEquals (5, data.changedFields.get (0).sequence, "campo apos Scroll ===>");
+      assertEquals (5, data.changedFields.get (0).sequence, "campo apos Scroll ===> ");
     }
 
     @Test
     @DisplayName ("sem rotulo de scroll nenhum campo e alterado")
     void withoutScrollLabel ()
     {
-      // uma tela de EDIT sem "Scroll ===>" nao passa por createPage, entao o setMax
-      // nunca e chamado — mas se fosse, sairia sem tocar em nada
       PluginData data = new ScreenBuilder ()                              //
           .protectedField (0, 0, TITLE)                                   //
           .protectedField (0, 60, "Columns 00001 00072")                  //
@@ -488,8 +694,6 @@ class DownloadDatasetTest
     @DisplayName ("sem rotulo de comando o scroll nao e alterado")
     void withoutCommandLabel ()
     {
-      // uma tela de EDIT sem o rotulo "Command ===>" nao passa por createPage, entao
-      // o setMax nunca e chamado — o teste garante que o caminho e o mesmo
       PluginData data = new ScreenBuilder ()                              //
           .protectedField (0, 0, TITLE)                                   //
           .protectedField (0, 60, "Columns 00001 00072")                  //

@@ -101,4 +101,12 @@ final class ScreenBuilder
   {
     return inputField (row, 1, 6, number).inputField (row, 8, 72, text);
   }
+
+  /** Uma linha de dados com largura de conteudo configuravel. */
+  // ---------------------------------------------------------------------------------//
+  ScreenBuilder dataLine (int row, String number, String text, int contentWidth)
+  // ---------------------------------------------------------------------------------//
+  {
+    return inputField (row, 1, 6, number).inputField (row, 8, contentWidth, text);
+  }
 }

@@ -71,6 +71,7 @@ public class Document
   private void stitch ()
   {
     int lineNo = 0;
+    int prevLeftColumn = -1;
     Collections.sort (pages);
 
     for (DocumentPage page : pages)
@@ -92,6 +93,14 @@ public class Document
       }
       else
       {
+        // Reinicia o contador quando muda a faixa de colunas, permitindo
+        // que a serpentina de download visite 3+ faixas horizontais.
+        if (page.leftColumn != prevLeftColumn)
+        {
+          lineNo = 0;
+          prevLeftColumn = page.leftColumn;
+        }
+
         int col = page.leftColumn - 1;
         String format = "%-" + col + "." + col + "s%s";
         for (String text : page.lines)

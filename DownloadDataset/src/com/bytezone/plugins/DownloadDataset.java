@@ -33,9 +33,10 @@ public class DownloadDataset extends DefaultPlugin
 
   private DocumentPage previousPage;
 
-  private boolean pendingBottomRight;
-  private boolean[][] visitedPages;
-  private int unvisitedPages = -1;
+  private boolean probingLrecl;
+  private boolean returningFromProbe;
+  private int detectedLrecl = -1;
+  private boolean scanningDown = true;
 
   private BiConsumer<AlertType, String> alertHandler = (type, msg) ->
       Platform.runLater (() ->
@@ -95,7 +96,10 @@ public class DownloadDataset extends DefaultPlugin
   {
     currentDocument = null;
     previousPage = null;
-    pendingBottomRight = false;
+    probingLrecl = false;
+    returningFromProbe = false;
+    detectedLrecl = -1;
+    scanningDown = true;
 
     DocumentPage page = DocumentPage.createPage (data, getModifiableFields (data));
     if (page == null)
@@ -125,16 +129,10 @@ public class DownloadDataset extends DefaultPlugin
 
     setCurrentDocument (page);
 
-    if (page.hasEnd)
-    {
-      data.key = AIDCommand.AID_PF11;
-      setMax (data);
-      pendingBottomRight = true;
-    }
-    else
-    {
-      data.key = AIDCommand.AID_PF8;
-    }
+    // Sondagem de LRECL: rola ao maximo para a direita para descobrir a ultima coluna
+    data.key = AIDCommand.AID_PF11;
+    setMax (data);
+    probingLrecl = true;
     doesAuto = true;
   }
 
@@ -148,16 +146,72 @@ public class DownloadDataset extends DefaultPlugin
       return;
     }
 
-    if (pendingBottomRight)
+    // --- Resposta da sondagem de LRECL ---
+    if (probingLrecl)
     {
-      pendingBottomRight = false;
-      prepareVisitorGrid (page.lastLine, page.rightColumn);
+      probingLrecl = false;
+      detectedLrecl = page.rightColumn;
+
+      if (page.leftColumn == 1)
+      {
+        // PF11 MAX nao rolou — LRECL cabe na area visivel
+        logger.info ("LRECL detectado: {} (sem scroll horizontal)", detectedLrecl);
+
+        if (page.hasEnd)
+        {
+          doesAuto = false;
+          saveDocument ();
+          return;
+        }
+        data.key = AIDCommand.AID_PF8;
+        return;
+      }
+
+      // LRECL largo detectado — voltar para a coluna 1
+      logger.info ("LRECL detectado: {} (scroll horizontal necessario)", detectedLrecl);
+      data.key = AIDCommand.AID_PF10;
+      setMax (data);
+      returningFromProbe = true;
+      return;
     }
 
-    // If page has no data lines, we've scrolled past the content
+    // --- Retornando da sondagem de LRECL ---
+    if (returningFromProbe)
+    {
+      returningFromProbe = false;
+
+      if (page.leftColumn != 1)
+      {
+        data.key = AIDCommand.AID_PF10;
+        setMax (data);
+        returningFromProbe = true;
+        return;
+      }
+
+      // De volta na coluna 1 — adiciona pagina e decide direcao
+      currentDocument.addDocumentPage (page);
+      previousPage = page;
+
+      if (page.hasEnd)
+      {
+        advanceRight (data);
+        return;
+      }
+
+      data.key = AIDCommand.AID_PF8;
+      return;
+    }
+
+    // --- Varredura normal ---
+
     if (page.lines.isEmpty ())
     {
-      logger.info ("Empty page detected - done scrolling");
+      logger.info ("Pagina vazia detectada");
+      if (needsMoreColumns (page))
+      {
+        advanceRight (data);
+        return;
+      }
       doesAuto = false;
       saveDocument ();
       return;
@@ -165,7 +219,12 @@ public class DownloadDataset extends DefaultPlugin
 
     if (page.matches (previousPage))
     {
-      logger.info ("We're done");
+      logger.info ("Pagina repetida");
+      if (needsMoreColumns (page))
+      {
+        advanceRight (data);
+        return;
+      }
       doesAuto = false;
       saveDocument ();
       return;
@@ -181,7 +240,7 @@ public class DownloadDataset extends DefaultPlugin
         return;
       }
 
-      if (page.leftColumn != 1)        // this could loop
+      if (page.leftColumn != 1)
       {
         data.key = AIDCommand.AID_PF10;
         setMax (data);
@@ -189,48 +248,50 @@ public class DownloadDataset extends DefaultPlugin
       }
 
       setCurrentDocument (page);
+
+      // Sondagem de LRECL
+      data.key = AIDCommand.AID_PF11;
+      setMax (data);
+      probingLrecl = true;
+      return;
     }
     else
       currentDocument.addDocumentPage (page);
 
     logger.debug ("{}", currentDocument);
 
-    logger.debug ("Where to now?");
-    // scroll to next page
-    if (page.leftColumn == 1)
+    // --- Navegacao em serpentina ---
+    if (scanningDown)
     {
       if (page.hasEnd)
       {
-        data.key = AIDCommand.AID_PF11;       // go max right
-        setMax (data);
-        logger.debug ("go right max");
-        pendingBottomRight = true;
+        if (needsMoreColumns (page))
+        {
+          advanceRight (data);
+          return;
+        }
+        doesAuto = false;
+        saveDocument ();
         return;
       }
-      else
-      {
-        data.key = AIDCommand.AID_PF8;        // go down
-        logger.debug ("go down");
-        return;
-      }
+      data.key = AIDCommand.AID_PF8;
+      return;
     }
     else
     {
       if (page.hasBeginning)
       {
-        data.key = AIDCommand.AID_PF10;       // go left (assumes only one circuit)
-        setMax (data);
+        if (needsMoreColumns (page))
+        {
+          advanceRight (data);
+          return;
+        }
         doesAuto = false;
-        logger.debug ("go left max");
         saveDocument ();
         return;
       }
-      else
-      {
-        data.key = AIDCommand.AID_PF7;        // go up
-        logger.debug ("go up");
-        return;
-      }
+      data.key = AIDCommand.AID_PF7;
+      return;
     }
   }
 
@@ -247,23 +308,17 @@ public class DownloadDataset extends DefaultPlugin
       scrollInput.change ("m");
   }
 
-  private void prepareVisitorGrid (int rows, int columns)
+  private boolean needsMoreColumns (DocumentPage page)
   {
-    // divide these by the page size
-    int pageRows = (rows - 1) / 20 + 1;
-    int pageColumns = (columns - 1) / 72 + 1;
+    return detectedLrecl > 0 && page.rightColumn < detectedLrecl;
+  }
 
-    currentDocument.maxColumns = columns;
-    currentDocument.totalLines = rows;
-    visitedPages = new boolean[pageRows][pageColumns];
-    for (int i = 0; i < pageRows; i++)
-      visitedPages[i][0] = true;
-    visitedPages[pageRows - 1][pageColumns - 1] = true;
-    int visitedPagesCount = pageRows + (pageColumns > 1 ? 1 : 0);
-    unvisitedPages = pageRows * pageColumns - visitedPagesCount;
-
-    logger.debug ("Grid {} rows x {} columns", pageRows, pageColumns);
-    logger.debug ("Visited: {}, unvisited: {}", visitedPagesCount, unvisitedPages);
+  private void advanceRight (PluginData data)
+  {
+    scanningDown = !scanningDown;
+    data.key = AIDCommand.AID_PF11;
+    logger.debug ("Avancando para a direita, proxima direcao: {}",
+        scanningDown ? "descendo" : "subindo");
   }
 
   // A captura termina aqui, e ela nao pode depender do toolkit do JavaFX: quem escolhe
