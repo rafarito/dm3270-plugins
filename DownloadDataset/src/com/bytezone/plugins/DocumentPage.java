@@ -2,6 +2,7 @@ package com.bytezone.plugins;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -19,6 +20,11 @@ public class DocumentPage implements Comparable<DocumentPage>
       "***************************** Top of Dat" + "a ******************************";
   private static final String END_DATA =
       "**************************** Bottom of D" + "ata ****************************";
+  // Alguns hosts (ex.: ISPF em Hercules/MVS) exibem esses marcadores em
+  // maiusculas e com prefixos como "AUTOSAVE", entao a busca abaixo e pela
+  // substring, sem diferenciar caixa.
+  private static final String TOP_MARKER = "TOP OF DATA";
+  private static final String BOTTOM_MARKER = "BOTTOM OF DATA";
   // getDatasetName () sabe ler os quatro cabecalhos; recusar BROWSE e VIEW aqui deixava
   // metade dessa logica inalcancavel.
   private static final Pattern EDIT_PATTERN = Pattern.compile (
@@ -108,9 +114,10 @@ public class DocumentPage implements Comparable<DocumentPage>
           if (nextField != null && nextField.isProtected
               && nextField.getLength () >= 72)
           {
-            if (nextField.getFieldValue ().startsWith (START_DATA))
+            String bannerValue = nextField.getFieldValue ();
+            if (bannerValue.regionMatches (true, 0, START_DATA, 0, START_DATA.length ()))
               hasBeginning = true;
-            else if (nextField.getFieldValue ().startsWith (END_DATA))
+            else if (bannerValue.regionMatches (true, 0, END_DATA, 0, END_DATA.length ()))
               hasEnd = true;
           }
         }
@@ -177,9 +184,10 @@ public class DocumentPage implements Comparable<DocumentPage>
         String val = sf.getFieldValue ();
         if (val == null)
           continue;
-        if (!hasBeginning && val.contains ("Top of Data"))
+        String upperVal = val.toUpperCase (Locale.ROOT);
+        if (!hasBeginning && upperVal.contains (TOP_MARKER))
           hasBeginning = true;
-        if (!hasEnd && val.contains ("Bottom of Data"))
+        if (!hasEnd && upperVal.contains (BOTTOM_MARKER))
           hasEnd = true;
       }
     }

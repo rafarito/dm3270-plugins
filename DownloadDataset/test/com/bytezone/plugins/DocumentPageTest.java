@@ -392,6 +392,41 @@ class DocumentPageTest
       assertTrue (documentPage.hasBeginning);
       assertTrue (documentPage.hasEnd);
     }
+
+    @Test
+    @DisplayName ("detecta os marcadores em maiusculas sem nenhum prefixo")
+    void detectsUppercaseMarkersWithoutAnyPrefix ()
+    {
+      ScreenBuilder builder =
+          ispfEditScreen ("EDIT       MYUSER.TEST.CNTL(JOB1)", "Columns 00001 00072")
+              .protectedField (3, 8, "***************** TOP OF DATA ******************")
+              .dataLine (4, "000100", "//JOB1 JOB")
+              .protectedField (5, 8, "*************** BOTTOM OF DATA *****************");
+
+      DocumentPage documentPage = page (builder);
+
+      assertTrue (documentPage.hasBeginning, "TOP OF DATA sem prefixo deveria ser reconhecido");
+      assertTrue (documentPage.hasEnd, "BOTTOM OF DATA sem prefixo deveria ser reconhecido");
+    }
+
+    @Test
+    @DisplayName ("detecta os marcadores em maiusculas com prefixo AUTOSAVE (ISPF em Hercules/MVS)")
+    void detectsUppercaseMarkersWithAutosavePrefix ()
+    {
+      ScreenBuilder builder =
+          ispfEditScreen ("EDIT       MYUSER.TEST.CNTL(JOB1)", "Columns 00001 00072")
+              .protectedField (3, 8,
+                  "***********AUTOSAVE********** TOP OF DATA ******************************")
+              .dataLine (4, "000100", "//JOB1 JOB")
+              .protectedField (5, 8,
+                  "***********AUTOSAVE********* BOTTOM OF DATA ****************************"
+                      + "                                                    6732K FREE");
+
+      DocumentPage documentPage = page (builder);
+
+      assertTrue (documentPage.hasBeginning, "TOP OF DATA em maiusculas deveria ser reconhecido");
+      assertTrue (documentPage.hasEnd, "BOTTOM OF DATA em maiusculas deveria ser reconhecido");
+    }
   }
 
   // ---------------------------------------------------------------------------------//
