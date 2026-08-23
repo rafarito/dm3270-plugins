@@ -146,6 +146,7 @@ public class DownloadDataset extends DefaultPlugin
       return;
     }
 
+
     // --- Resposta da sondagem de LRECL ---
     if (probingLrecl)
     {
@@ -163,6 +164,7 @@ public class DownloadDataset extends DefaultPlugin
           saveDocument ();
           return;
         }
+        setPage (data);
         data.key = AIDCommand.AID_PF8;
         return;
       }
@@ -198,6 +200,7 @@ public class DownloadDataset extends DefaultPlugin
         return;
       }
 
+      setPage (data);
       data.key = AIDCommand.AID_PF8;
       return;
     }
@@ -297,7 +300,7 @@ public class DownloadDataset extends DefaultPlugin
 
   // O "m" (MAX) pertence ao campo de scroll: escrito na linha de comando ele nao rola
   // nada e ainda deixa lixo no campo que o ISPF vai interpretar como comando.
-  private void setMax (PluginData data)
+  private void setScroll (PluginData data, String amount)
   {
     PluginField scrollLabel = data.getField ("Scroll ===>");
     if (scrollLabel == null)
@@ -305,7 +308,19 @@ public class DownloadDataset extends DefaultPlugin
 
     PluginField scrollInput = data.getField (scrollLabel.sequence + 1);
     if (scrollInput != null && scrollInput.isModifiable)
-      scrollInput.change ("m");
+      scrollInput.change (amount);
+  }
+
+  private void setMax (PluginData data)
+  {
+    setScroll (data, "m");
+  }
+
+  // O campo Scroll e "pegajoso" no ISPF: uma vez em "m" (MAX), PF7/8/10/11
+  // seguintes continuam pulando no maximo ate o campo ser trocado de volta.
+  private void setPage (PluginData data)
+  {
+    setScroll (data, "page");
   }
 
   private boolean needsMoreColumns (DocumentPage page)
@@ -315,6 +330,7 @@ public class DownloadDataset extends DefaultPlugin
 
   private void advanceRight (PluginData data)
   {
+    setPage (data);
     scanningDown = !scanningDown;
     data.key = AIDCommand.AID_PF11;
     logger.debug ("Avancando para a direita, proxima direcao: {}",

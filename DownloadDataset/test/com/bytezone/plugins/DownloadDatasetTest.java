@@ -246,6 +246,7 @@ class DownloadDatasetTest
       plugin.processAuto (probe);
 
       assertEquals (AIDCommand.AID_PF8, probe.key);
+      assertEquals ("page", maxValue (probe), "o scroll deveria voltar ao normal");
       assertTrue (plugin.doesAuto ());
     }
 
@@ -292,6 +293,7 @@ class DownloadDatasetTest
       plugin.processAuto (back);
 
       assertEquals (AIDCommand.AID_PF8, back.key);
+      assertEquals ("page", maxValue (back), "o scroll deveria voltar ao normal");
       assertTrue (plugin.doesAuto ());
     }
 
@@ -488,6 +490,7 @@ class DownloadDatasetTest
       plugin.processAuto (bottom);
 
       assertEquals (AIDCommand.AID_PF11, bottom.key, "deve avancar para a direita");
+      assertEquals ("page", maxValue (bottom), "o avanco deve ser de uma tela, nao MAX");
       assertTrue (plugin.doesAuto ());
     }
 
@@ -505,6 +508,8 @@ class DownloadDatasetTest
       plugin.processAuto (shifted);
 
       assertEquals (AIDCommand.AID_PF7, shifted.key, "deve subir nesta faixa");
+      assertTrue (shifted.changedFields.isEmpty (),
+          "continuar dentro da mesma faixa nao deve mexer no scroll");
       assertTrue (plugin.doesAuto ());
     }
 
@@ -523,6 +528,7 @@ class DownloadDatasetTest
 
       // rightColumn (144) < detectedLrecl (200) -> avanca
       assertEquals (AIDCommand.AID_PF11, top.key, "deve avancar para a proxima faixa");
+      assertEquals ("page", maxValue (top), "o avanco deve ser de uma tela, nao MAX");
       assertTrue (plugin.doesAuto ());
     }
 
@@ -584,7 +590,72 @@ class DownloadDatasetTest
       plugin.processAuto (repeat);
 
       assertEquals (AIDCommand.AID_PF11, repeat.key, "deve avancar, nao salvar");
+      assertEquals ("page", maxValue (repeat), "o avanco deve ser de uma tela, nao MAX");
       assertTrue (plugin.doesAuto ());
+    }
+
+    @Test
+    @DisplayName ("LRECL=216 (3 faixas) com varias paginas por faixa: nenhuma linha e perdida")
+    void capturesAllLinesAcrossThreeStripesWithoutSkipping ()
+    {
+      // Regressao: com o scroll preso em MAX apos a sondagem, um unico PF8/PF7
+      // pulava direto do topo para o fim de cada faixa, perdendo as paginas do
+      // meio - exatamente o que este teste percorre explicitamente.
+      List<Document> saved = new ArrayList<> ();
+      plugin.setDocumentSaver (saved::add);
+
+      plugin.processRequest (page ("Columns 00001 00072", 1).build ());
+
+      // Sondagem: LRECL=216 exige 3 faixas (1-72, 73-144, 145-216)
+      plugin.processAuto (page ("Columns 00145 00216", 1).build ());
+
+      // Retorno da sondagem: reafirma o topo da faixa 1
+      PluginData back = page ("Columns 00001 00072", 1).build ();
+      plugin.processAuto (back);
+      assertEquals ("page", maxValue (back), "o scroll deveria voltar ao normal");
+
+      // Faixa 1 (1-72), descendo: meio e fim, sem pular nenhum
+      PluginData mid1 = page ("Columns 00001 00072", 301).build ();
+      plugin.processAuto (mid1);
+      assertTrue (mid1.changedFields.isEmpty (), "continuacao normal nao mexe no scroll");
+
+      PluginData bottom1 = pageWithEnd ("Columns 00001 00072", 601).build ();
+      plugin.processAuto (bottom1);
+      assertEquals (AIDCommand.AID_PF11, bottom1.key, "fim da faixa 1: avanca para a faixa 2");
+      assertEquals ("page", maxValue (bottom1), "o avanco deve ser de uma tela, nao MAX");
+
+      // Faixa 2 (73-144), subindo a partir do fim: fim, meio e topo
+      PluginData bottom2 = pageWithEnd ("Columns 00073 00144", 601).build ();
+      plugin.processAuto (bottom2);
+      assertEquals (AIDCommand.AID_PF7, bottom2.key, "faixa deslocada: sobe");
+
+      PluginData mid2 = page ("Columns 00073 00144", 301).build ();
+      plugin.processAuto (mid2);
+      assertTrue (mid2.changedFields.isEmpty (), "continuacao normal nao mexe no scroll");
+
+      PluginData top2 = pageWithTop ("Columns 00073 00144", 1).build ();
+      plugin.processAuto (top2);
+      assertEquals (AIDCommand.AID_PF11, top2.key, "topo da faixa 2: avanca para a faixa 3");
+      assertEquals ("page", maxValue (top2), "o avanco deve ser de uma tela, nao MAX");
+
+      // Faixa 3 (145-216), descendo a partir do topo: topo, meio e fim -> salva
+      PluginData top3 = pageWithTop ("Columns 00145 00216", 1).build ();
+      plugin.processAuto (top3);
+      assertEquals (AIDCommand.AID_PF8, top3.key, "faixa deslocada: desce");
+
+      PluginData mid3 = page ("Columns 00145 00216", 301).build ();
+      plugin.processAuto (mid3);
+      assertTrue (mid3.changedFields.isEmpty (), "continuacao normal nao mexe no scroll");
+
+      plugin.processAuto (pageWithEnd ("Columns 00145 00216", 601).build ());
+
+      assertFalse (plugin.doesAuto ());
+      assertEquals (1, saved.size ());
+
+      Document document = saved.get (0);
+      assertEquals (9, document.getLines ().size (),
+          "3 paginas verticais x 3 linhas cada, sem duplicar nem pular nenhuma");
+      assertEquals (216, document.maxColumns, "deve ter costurado as 3 faixas ate o LRECL");
     }
   }
 
