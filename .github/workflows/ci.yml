@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - 'refactor/**'
   pull_request:
   workflow_dispatch:
 
@@ -22,21 +23,31 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
-      # Os plugins compilam contra o dm3270. Aqui o jar da ultima release e
-      # instalado no repositorio Maven local com as mesmas coordenadas declaradas
-      # no pom (com.bytezone:dm3270:1.0.0-SNAPSHOT).
-      - name: Instalar a dependencia do dm3270
-        env:
-          GH_TOKEN: ${{ github.token }}
+      # Os plugins compilam contra o dm3270. Este passo CONSTROI o dm3270 do checkout,
+      # e nao baixa o jar da ultima release: enquanto a release fosse a fonte, uma
+      # mudanca na API de Plugin so apareceria aqui depois de publicada, e ate la o CI
+      # quebraria - ou passaria - por um motivo que nao tem a ver com o commit em teste.
+      #
+      # A branch e a mesma dos plugins quando ela existe la, e main quando nao existe.
+      # Isso e o que permite desenvolver uma mudanca de API nos dois repositorios ao
+      # mesmo tempo, com o CI acompanhando o par certo.
+      #
+      # As coordenadas nao precisam de ajuste: o pom do dm3270 ja declara
+      # com.bytezone:dm3270:1.0.0-SNAPSHOT, que e o que este pom pede.
+      - name: Construir e instalar a dependencia do dm3270
         run: |
-          gh release download --repo rafarito/dm3270 --pattern "*.jar"
-          DM3270_JAR=$(ls dm3270-*.jar | head -n 1)
-          mvn --batch-mode install:install-file \
-            -Dfile="${DM3270_JAR}" \
-            -DgroupId=com.bytezone \
-            -DartifactId=dm3270 \
-            -Dversion=1.0.0-SNAPSHOT \
-            -Dpackaging=jar
+          REPO=https://github.com/rafarito/dm3270.git
+          BRANCH="${{ github.head_ref || github.ref_name }}"
+
+          if git ls-remote --exit-code --heads "$REPO" "$BRANCH" > /dev/null 2>&1; then
+            echo "dm3270: construindo a partir da branch $BRANCH"
+          else
+            echo "dm3270: a branch $BRANCH nao existe la, usando main"
+            BRANCH=main
+          fi
+
+          git clone --depth 1 --branch "$BRANCH" "$REPO" dm3270
+          mvn --batch-mode -f dm3270/pom.xml install -DskipTests
 
       - name: Rodar os testes
         run: mvn --batch-mode test
